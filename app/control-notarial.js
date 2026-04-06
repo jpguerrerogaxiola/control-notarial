@@ -25,8 +25,8 @@ const db = {
   updateProject: (id, d) => sb("projects", "PATCH", d, `?id=eq.${id}`),
   deleteProject: (id) => sb("projects", "DELETE", null, `?id=eq.${id}`),
   getDias: () => sb("dias_inhabiles", "GET", null, "?order=fecha.asc"),
-  addDia: (f, m) => sb("dias_inhabiles", "POST", { fecha: f, motivo: m }),
-  delDia: (f) => sb("dias_inhabiles", "DELETE", null, `?fecha=eq.${f}`),
+  addDia: (f, m, nid) => sb("dias_inhabiles", "POST", { fecha: f, motivo: m, notaria_id: nid || null }),
+  delDia: (id) => sb("dias_inhabiles", "DELETE", null, `?id=eq.${id}`),
   getNotarias: () => sb("notarias", "GET", null, "?order=created_at.asc"),
   createNotaria: (n) => sb("notarias", "POST", n),
   updateNotaria: (id, d) => sb("notarias", "PATCH", d, `?id=eq.${id}`),
@@ -104,12 +104,11 @@ function dbToApp(r){
 // ═══════════════════════════════════════════════════════════════
 // ALERTS
 // ═══════════════════════════════════════════════════════════════
-function buildAlerts(ps,inh){
+function buildAlerts(ps,inh,inhFor){
   const a=[];
-  ps.forEach(p=>{const et=getEt(p.tipo);if(p.finished||p.step>=et.length)return;const e=et[p.step],info=getSt(p,p.step,inh);
+  ps.forEach(p=>{const et=getEt(p.tipo),pInh=inhFor?inhFor(p.notariaId):inh;if(p.finished||p.step>=et.length)return;const e=et[p.step],info=getSt(p,p.step,pInh);
     if(info.s==="over"||info.s==="soon")a.push({id:`${p.id}-${e.id}-${info.s}`,tipo:info.s==="over"?"vencida":"por_vencer",proj:p.name,pid:p.id,etapa:e.label,owner:e.owner,v:info.v,respN:p.respNotaria,nid:p.notariaId});
-    // Also check pago deadline
-    if(p.factSent&&!p.pagoMarcado){const pv=addBD(p.factDate,2,inh);if(pv){const h=td();if(h>pv)a.push({id:`${p.id}-pago-over`,tipo:"vencida",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});else if(bdBtw(h,pv,inh)<=1)a.push({id:`${p.id}-pago-soon`,tipo:"por_vencer",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});}}
+    if(p.factSent&&!p.pagoMarcado){const pv=addBD(p.factDate,2,pInh);if(pv){const h=td();if(h>pv)a.push({id:`${p.id}-pago-over`,tipo:"vencida",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});else if(bdBtw(h,pv,pInh)<=1)a.push({id:`${p.id}-pago-soon`,tipo:"por_vencer",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});}}
   });
   return a;
 }
@@ -205,14 +204,14 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate}){
 // ═══════════════════════════════════════════════════════════════
 // EFFECTIVENESS
 // ═══════════════════════════════════════════════════════════════
-function EffPanel({ps,inh,notarias,filtNot}){
+function EffPanel({ps,inh,inhFor,notarias,filtNot}){
   const fp=filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
   const done=fp.filter(p=>p.finished);
   if(!done.length)return <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:40,textAlign:"center"}}><div style={{fontSize:40,marginBottom:10}}>📊</div><div style={{fontSize:14,fontWeight:600}}>Sin proyectos completados</div></div>;
   const calc=(owner)=>{
     let ts=0,tc=0;
     const details=done.map(p=>{const et=getEt(p.tipo);let ps2=0,pc=0;
-      et.forEach(e=>{if(e.owner!==owner)return;const d=p.etapas[e.id];const start=(e.id==="pago"&&p.factDate)?p.factDate:d?.start;const end=(e.id==="pago"&&p.pagoDate)?p.pagoDate:d?.end;const plazo=e.id==="pago"?2:e.plazo;if(plazo>0&&start&&end){const real=bdBtw(start,end,inh),sc=real<=plazo?100:Math.max(0,100-(real-plazo)*25);ps2+=sc;pc++;ts+=sc;tc++;}});
+      et.forEach(e=>{if(e.owner!==owner)return;const d=p.etapas[e.id];const pInh=inhFor?inhFor(p.notariaId):inh;const start=(e.id==="pago"&&p.factDate)?p.factDate:d?.start;const end=(e.id==="pago"&&p.pagoDate)?p.pagoDate:d?.end;const plazo=e.id==="pago"?2:e.plazo;if(plazo>0&&start&&end){const real=bdBtw(start,end,pInh),sc=real<=plazo?100:Math.max(0,100-(real-plazo)*25);ps2+=sc;pc++;ts+=sc;tc++;}});
       return{name:p.name,score:pc>0?Math.round(ps2/pc):100,date:p.finDate};
     });
     return{global:tc>0?Math.round(ts/tc):100,details};
@@ -234,24 +233,83 @@ function EffPanel({ps,inh,notarias,filtNot}){
 // ═══════════════════════════════════════════════════════════════
 // CALENDAR
 // ═══════════════════════════════════════════════════════════════
-function Cal({inh,addInh,delInh}){
+function Cal({inh,addInh,delInh,notarias,role,nid}){
   const[nd,setNd]=useState("");const[nm,setNm]=useState("");
-  const lftS=new Set(LFT.map(d=>d.fecha)),lft=inh.filter(d=>lftS.has(d.fecha)),custom=inh.filter(d=>!lftS.has(d.fecha));
-  const add=async()=>{if(!nd||inh.some(d=>d.fecha===nd))return;await addInh(nd,nm||"Personalizado");setNd("");setNm("");};
+  const[selNot,setSelNot]=useState(role==="notaria"?nid:(notarias[0]?.id||""));
+  const lftS=new Set(LFT.map(d=>d.fecha));
+  const lft=inh.filter(d=>lftS.has(d.fecha)&&!d.nid);
+  // General custom (no notaría) + for selected notaría
+  const generalCustom=inh.filter(d=>!lftS.has(d.fecha)&&!d.nid);
+  const notCustom=selNot?inh.filter(d=>!lftS.has(d.fecha)&&d.nid===selNot):[];
+  const selNotName=notarias.find(n=>n.id===selNot)?.name||"";
+
+  const add=async(forNotaria)=>{
+    if(!nd)return;
+    const targetNid=forNotaria?selNot:null;
+    const exists=inh.some(d=>d.fecha===nd&&((!d.nid&&!targetNid)||(d.nid===targetNid)));
+    if(exists)return;
+    await addInh(nd,nm||"Personalizado",targetNid);
+    setNd("");setNm("");
+  };
+
   return(
     <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24}}>
       <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>📅 Días inhábiles</div>
-      <div style={{fontSize:12,color:"#8a857c",marginBottom:18}}>Sábados, domingos y festivos LFT excluidos automáticamente.</div>
+      <div style={{fontSize:12,color:"#8a857c",marginBottom:18}}>Sábados, domingos y festivos LFT excluidos automáticamente. Agrega días generales o específicos por notaría.</div>
+
+      {/* Notaría selector */}
+      {role==="alonso"&&notarias.length>0&&(
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:4}}>Ver días de notaría:</div>
+          <select style={{...iS,width:"auto"}} value={selNot} onChange={e=>setSelNot(e.target.value)}>
+            {notarias.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* Add form */}
       <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div><div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:4}}>Fecha</div><input type="date" value={nd} onChange={e=>setNd(e.target.value)} style={{...iS,width:"auto"}}/></div>
-        <div style={{flex:1,minWidth:200}}><div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:4}}>Motivo</div><input value={nm} onChange={e=>setNm(e.target.value)} placeholder="Vacaciones notario, Cierre RPPC…" style={iS}/></div>
-        <Bt onClick={add} disabled={!nd}>Agregar</Bt>
+        <div style={{flex:1,minWidth:180}}><div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:4}}>Motivo</div><input value={nm} onChange={e=>setNm(e.target.value)} placeholder="Vacaciones, cierre RPPC…" style={iS}/></div>
+        {role==="alonso"&&<Bt v="g" onClick={()=>add(false)} disabled={!nd}>+ General</Bt>}
+        {selNot&&<Bt onClick={()=>add(true)} disabled={!nd}>+ {selNotName||"Notaría"}</Bt>}
       </div>
+
+      {/* LFT */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Festivos LFT ({lft.length})</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+          {lft.map(d=><div key={d.fecha} style={{padding:"4px 10px",borderRadius:8,background:"#f8f7f5",fontSize:11}}>{fmt(d.fecha)} — {d.motivo}</div>)}
+        </div>
+      </div>
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
-        <div><div style={{fontSize:12,fontWeight:700,marginBottom:8}}>LFT ({lft.length})</div><div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:280,overflowY:"auto"}}>{lft.map(d=><div key={d.fecha} style={{display:"flex",justifyContent:"space-between",padding:"5px 10px",borderRadius:8,background:"#f8f7f5",fontSize:12}}><span>{fmt(d.fecha)}</span><span style={{color:"#8a857c",fontSize:11}}>{d.motivo}</span></div>)}</div></div>
-        <div><div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Personalizados ({custom.length})</div>
-          {!custom.length?<div style={{fontSize:12,color:"#8a857c",padding:20,textAlign:"center",background:"#f8f7f5",borderRadius:10}}>Sin días personalizados</div>:
-          <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:280,overflowY:"auto"}}>{custom.map(d=><div key={d.fecha} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 10px",borderRadius:8,background:"#fffbeb",fontSize:12}}><span>{fmt(d.fecha)} — <span style={{color:"#8a857c"}}>{d.motivo}</span></span><button onClick={()=>delInh(d.fecha)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit"}}>✕</button></div>)}</div>}
+        {/* General custom */}
+        {role==="alonso"&&(
+          <div>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Generales ({generalCustom.length})</div>
+            <div style={{fontSize:10,color:"#8a857c",marginBottom:6}}>Aplican para todas las notarías</div>
+            {!generalCustom.length?<div style={{fontSize:12,color:"#8a857c",padding:16,textAlign:"center",background:"#f8f7f5",borderRadius:10}}>Sin días generales</div>:
+            <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:250,overflowY:"auto"}}>
+              {generalCustom.map(d=><div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 10px",borderRadius:8,background:"#eff6ff",fontSize:12}}>
+                <span>{fmt(d.fecha)} — <span style={{color:"#8a857c"}}>{d.motivo}</span></span>
+                <button onClick={()=>delInh(d.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit"}}>✕</button>
+              </div>)}
+            </div>}
+          </div>
+        )}
+
+        {/* Notaría-specific */}
+        <div>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>{selNotName||"Notaría"} ({notCustom.length})</div>
+          <div style={{fontSize:10,color:"#8a857c",marginBottom:6}}>Solo aplican para esta notaría</div>
+          {!notCustom.length?<div style={{fontSize:12,color:"#8a857c",padding:16,textAlign:"center",background:"#f8f7f5",borderRadius:10}}>Sin días específicos</div>:
+          <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:250,overflowY:"auto"}}>
+            {notCustom.map(d=><div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 10px",borderRadius:8,background:"#f5f3ff",fontSize:12}}>
+              <span>{fmt(d.fecha)} — <span style={{color:"#8a857c"}}>{d.motivo}</span></span>
+              <button onClick={()=>delInh(d.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit"}}>✕</button>
+            </div>)}
+          </div>}
         </div>
       </div>
     </div>
@@ -383,7 +441,10 @@ function Dash({session,notarias,setNotarias,onLogout}){
   const role=session.role,nid=session.notariaId||null;
   const[vista,setVista]=useState("dashboard");
   const[ps,setPs]=useState([]);
-  const[inh,setInh]=useState([...LFT]);
+  const[inh,setInh]=useState([...LFT.map(d=>({...d,id:null,nid:null}))]);
+
+  // Get inhábiles for a specific notaría: LFT + generales (nid=null) + de esa notaría
+  const inhFor=(notariaId)=>inh.filter(d=>!d.nid||d.nid===notariaId);
   const[selId,setSelId]=useState(null);
   const[showForm,setShowForm]=useState(false);
   const[filtro,setFiltro]=useState("todos");
@@ -391,10 +452,10 @@ function Dash({session,notarias,setNotarias,onLogout}){
   const[cfm,setCfm]=useState(null);
   const[loading,setLoading]=useState(true);
 
-  useEffect(()=>{(async()=>{setLoading(true);const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);setPs((projects||[]).map(dbToApp));setInh([...LFT,...(dias||[]).map(d=>({fecha:d.fecha,motivo:d.motivo}))]);setLoading(false);})();},[]);
-  useEffect(()=>{const iv=setInterval(async()=>{const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);if(projects)setPs(projects.map(dbToApp));if(dias)setInh([...LFT,...dias.map(d=>({fecha:d.fecha,motivo:d.motivo}))]);},30000);return()=>clearInterval(iv);},[]);
+  useEffect(()=>{(async()=>{setLoading(true);const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);setPs((projects||[]).map(dbToApp));setInh([...LFT.map(d=>({...d,id:null,nid:null})),...(dias||[]).map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);setLoading(false);})();},[]);
+  useEffect(()=>{const iv=setInterval(async()=>{const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);if(projects)setPs(projects.map(dbToApp));if(dias)setInh([...LFT.map(d=>({...d,id:null,nid:null})),...dias.map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);},30000);return()=>clearInterval(iv);},[]);
 
-  const alerts=useMemo(()=>buildAlerts(ps,inh),[ps,inh]);
+  const alerts=useMemo(()=>buildAlerts(ps,inh,inhFor),[ps,inh]);
 
   const save=async(id,upd)=>{
     const d={};
@@ -433,8 +494,8 @@ function Dash({session,notarias,setNotarias,onLogout}){
   },[]);
 
   const del=useCallback(async(pid)=>{await db.deleteProject(pid);setPs(prev=>prev.filter(p=>p.id!==pid));setSelId(null);},[]);
-  const addInh=useCallback(async(f,m)=>{await db.addDia(f,m);setInh(prev=>[...prev,{fecha:f,motivo:m}].sort((a,b)=>a.fecha.localeCompare(b.fecha)));},[]);
-  const delInh=useCallback(async(f)=>{await db.delDia(f);setInh(prev=>prev.filter(d=>d.fecha!==f));},[]);
+  const addInh=useCallback(async(f,m,nid)=>{const r=await db.addDia(f,m,nid);if(r){const row=Array.isArray(r)?r[0]:r;setInh(prev=>[...prev,{fecha:f,motivo:m,id:row?.id||null,nid:nid||null}].sort((a,b)=>a.fecha.localeCompare(b.fecha)));}},[]);
+  const delInh=useCallback(async(id)=>{await db.delDia(id);setInh(prev=>prev.filter(d=>d.id!==id));},[]);
 
   // Notaria CRUD
   const createNot=useCallback(async(f)=>{const r=await db.createNotaria(f);if(r)setNotarias(prev=>[...prev,...(Array.isArray(r)?r:[r])]);},[]);
@@ -450,7 +511,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
     return visiblePs.filter(p=>{const et=getEt(p.tipo);
       if(filtro==="activos"&&p.finished)return false;if(filtro==="completados"&&!p.finished)return false;
       if(filtro==="mi_turno")return isMyTurn(p);
-      if(filtro==="vencidos"){if(p.finished||p.step>=et.length)return false;return getSt(p,p.step,inh).s==="over";}
+      if(filtro==="vencidos"){if(p.finished||p.step>=et.length)return false;return getSt(p,p.step,inhFor(p.notariaId)).s==="over";}
       return true;
     });
   },[visiblePs,filtro,role,inh]);
@@ -458,7 +519,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
   const sel=ps.find(p=>p.id===selId);
   const act=visiblePs.filter(p=>!p.finished).length;
   const mt=visiblePs.filter(p=>isMyTurn(p)).length;
-  const ov=visiblePs.filter(p=>{const et=getEt(p.tipo);return!p.finished&&p.step<et.length&&getSt(p,p.step,inh).s==="over";}).length;
+  const ov=visiblePs.filter(p=>{const et=getEt(p.tipo);return!p.finished&&p.step<et.length&&getSt(p,p.step,inhFor(p.notariaId)).s==="over";}).length;
   const comp=visiblePs.filter(p=>p.finished).length;
   const tab=(v,l)=><button key={v} onClick={()=>setVista(v)} style={{padding:"6px 13px",borderRadius:8,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:vista===v?"#2563eb":"transparent",color:vista===v?"#fff":"#8a857c"}}>{l}</button>;
   const fS={padding:"7px 12px",borderRadius:8,border:"1px solid #e8e5df",background:"#fff",color:"#1a1714",fontSize:12,outline:"none",cursor:"pointer",fontFamily:"inherit"};
@@ -514,7 +575,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
           <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Tu turno</div>
           <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",overflow:"hidden"}}>
             {!visiblePs.filter(p=>isMyTurn(p)).length?<div style={{padding:28,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin tareas pendientes 🎉</div>
-              :visiblePs.filter(p=>isMyTurn(p)).map(p=>{const et=getEt(p.tipo),e=et[p.step],info=getSt(p,p.step,inh);return(
+              :visiblePs.filter(p=>isMyTurn(p)).map(p=>{const et=getEt(p.tipo),e=et[p.step],info=getSt(p,p.step,inhFor(p.notariaId));return(
                 <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 16px",borderBottom:"1px solid #e8e5df",cursor:"pointer"}} onClick={()=>{setSelId(p.id);setVista("proyectos");}} onMouseEnter={ev=>ev.currentTarget.style.background="#f8f7f5"} onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}>
                   <div><div style={{fontSize:13,fontWeight:600}}>{p.name}</div><div style={{fontSize:11,color:"#8a857c"}}>{e.label} — {TIPO_L[p.tipo]}{role==="alonso"&&getNotName(p.notariaId)?` — ${getNotName(p.notariaId)}`:""}{p.respNotaria?` — ${p.respNotaria}`:""}</div></div>
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>{info.v&&<span style={{fontSize:11,color:info.c,fontWeight:600}}>Vence {fmt(info.v)}</span>}<Bg bg={info.c+"15"} color={info.c}>{info.l}</Bg></div>
@@ -549,7 +610,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
                   <button onClick={()=>setSelId(null)} style={{background:"#f1f0ed",border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",fontSize:14,color:"#8a857c",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                 </div>
               </div>
-              <Pipe p={sel} inh={inh} role={role} onDone={advance} onUndo={pid=>setCfm({msg:"¿Deshacer la última etapa?",action:()=>undo(pid)})} onFact={markFact} onPago={markPago} onEditDate={editDate}/>
+              <Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={pid=>setCfm({msg:"¿Deshacer la última etapa?",action:()=>undo(pid)})} onFact={markFact} onPago={markPago} onEditDate={editDate}/>
             </div>
           )}
           <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
@@ -561,7 +622,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
               <span>Proyecto</span>{role==="alonso"&&<span>Notaría</span>}<span>Etapa</span><span>Turno</span><span style={{textAlign:"center"}}>Estado</span>
             </div>
             {!filtered.length&&<div style={{padding:36,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin proyectos</div>}
-            {filtered.map(p=>{const et=getEt(p.tipo),e=p.step<et.length?et[p.step]:null,info=e?getSt(p,p.step,inh):{c:"#16a34a",l:"✓"};return(
+            {filtered.map(p=>{const et=getEt(p.tipo),e=p.step<et.length?et[p.step]:null,info=e?getSt(p,p.step,inhFor(p.notariaId)):{c:"#16a34a",l:"✓"};return(
               <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"10px 16px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}>
                 <div><div style={{fontSize:13,fontWeight:600}}>{p.name}</div><div style={{fontSize:11,color:"#8a857c"}}>{TIPO_L[p.tipo]}{p.respNotaria?` — ${p.respNotaria}`:""}</div></div>
                 {role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}
@@ -573,8 +634,8 @@ function Dash({session,notarias,setNotarias,onLogout}){
           </div>
         </>}
 
-        {vista==="efectividad"&&<EffPanel ps={ps} inh={inh} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
-        {vista==="calendario"&&<Cal inh={inh} addInh={addInh} delInh={delInh}/>}
+        {vista==="efectividad"&&<EffPanel ps={ps} inh={inh} inhFor={inhFor} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
+        {vista==="calendario"&&<Cal inh={inh} addInh={addInh} delInh={delInh} notarias={notarias} role={role} nid={nid}/>}
         {vista==="notarias"&&role==="alonso"&&<NotAdmin notarias={notarias} onCreate={createNot} onUpdate={updateNot} onDelete={id=>setCfm({msg:"¿Eliminar esta notaría?",action:()=>deleteNot(id)})}/>}
       </div>
     </div>
