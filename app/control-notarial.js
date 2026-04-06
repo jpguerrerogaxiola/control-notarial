@@ -176,7 +176,17 @@ function Pipe({ p, inh, role, onDone, onUndo, onFact, onPago }) {
         let dI = info;
         if (isFact && envDone && !p.factSent && info.s === "wait") dI = { s: "active", c: "#7c3aed", l: "Disponible" };
         if (isFact && p.factSent) dI = { s: "done", c: "#16a34a", l: "Completada" };
-        if (isPago && p.factSent && !p.pagoMarcado && info.s === "wait") dI = { s: "active", c: "#2563eb", l: "Disponible" };
+        // Pago: calculate deadline from factDate
+        let pagoVenc = null, pagoDI = null;
+        if (isPago && p.factSent && !p.pagoMarcado) {
+          pagoVenc = addBD(p.factDate, 2, inh);
+          const h = td();
+          if (h > pagoVenc) pagoDI = { s: "over", c: "#dc2626", l: "Vencida" };
+          else if (bdBetween(h, pagoVenc, inh) <= 1) pagoDI = { s: "soon", c: "#d97706", l: "Por vencer" };
+          else pagoDI = { s: "active", c: "#2563eb", l: "En curso" };
+        }
+        if (isPago && p.factSent && !p.pagoMarcado && info.s === "wait") dI = pagoDI || { s: "active", c: "#2563eb", l: "Disponible" };
+        if (isPago && p.factSent && !p.pagoMarcado && info.s !== "wait") dI = pagoDI || info;
         if (isPago && p.pagoMarcado) dI = { s: "done", c: "#16a34a", l: "Completada" };
         const rowHL = (isFact && envDone && !p.factSent) || (isPago && p.factSent && !p.pagoMarcado);
         return (
@@ -189,10 +199,14 @@ function Pipe({ p, inh, role, onDone, onUndo, onFact, onPago }) {
                 <div style={{ fontSize: 13, fontWeight: 600, color: dI.s === "wait" ? "#8a857c" : "#1a1714", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{e.label} <OBg o={e.owner} /></div>
                 <div style={{ fontSize: 11, color: "#8a857c", marginTop: 2 }}>{e.desc}</div>
                 <div style={{ display: "flex", gap: 10, marginTop: 3, flexWrap: "wrap", fontSize: 11, color: "#8a857c" }}>
-                  {e.plazo > 0 && <span>Plazo: {e.plazo} días háb.</span>}
-                  {d?.start && <span>Inicio: {fmt(d.start)}</span>}
-                  {d?.end && <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ {fmt(d.end)}</span>}
-                  {info.v && !d?.done && <span style={{ color: info.c, fontWeight: 700 }}>Vence: {fmt(info.v)}</span>}
+                  {e.plazo > 0 && !isPago && <span>Plazo: {e.plazo} días háb.</span>}
+                  {isPago && <span>Plazo: 2 días háb. desde factura</span>}
+                  {isPago && p.factSent && <span>Factura: {fmt(p.factDate)}</span>}
+                  {isPago && pagoVenc && !p.pagoMarcado && <span style={{ color: dI.c, fontWeight: 700 }}>Vence: {fmt(pagoVenc)}</span>}
+                  {isPago && p.pagoMarcado && <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ Pagado: {fmt(p.pagoDate)}</span>}
+                  {!isPago && d?.start && <span>Inicio: {fmt(d.start)}</span>}
+                  {!isPago && d?.end && <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ {fmt(d.end)}</span>}
+                  {!isPago && info.v && !d?.done && <span style={{ color: info.c, fontWeight: 700 }}>Vence: {fmt(info.v)}</span>}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
@@ -225,7 +239,7 @@ function EffPanel({ ps, inh }) {
     let ts = 0, tc = 0;
     const details = done.map(p => {
       const etapas = getEtapas(p.tipo); let ps2 = 0, pc = 0;
-      etapas.forEach(e => { if (e.owner !== owner) return; const d = p.etapas[e.id]; if (e.plazo > 0 && d?.start && d?.end) { const real = bdBetween(d.start, d.end, inh), sc = real <= e.plazo ? 100 : Math.max(0, 100 - (real - e.plazo) * 25); ps2 += sc; pc++; ts += sc; tc++; } });
+      etapas.forEach(e => { if (e.owner !== owner) return; const d = p.etapas[e.id]; const start = (e.id === "pago" && p.factDate) ? p.factDate : d?.start; const end = (e.id === "pago" && p.pagoDate) ? p.pagoDate : d?.end; const plazo = e.id === "pago" ? 2 : e.plazo; if (plazo > 0 && start && end) { const real = bdBetween(start, end, inh), sc = real <= plazo ? 100 : Math.max(0, 100 - (real - plazo) * 25); ps2 += sc; pc++; ts += sc; tc++; } });
       return { name: p.name, score: pc > 0 ? Math.round(ps2 / pc) : 100, date: p.finDate };
     });
     return { global: tc > 0 ? Math.round(ts / tc) : 100, details };
