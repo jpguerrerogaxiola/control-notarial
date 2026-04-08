@@ -840,44 +840,54 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 // ═══════════════════════════════════════════════════════════════
 // EXPEDIENTE DIGITAL
 // ═══════════════════════════════════════════════════════════════
-function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria}){
+function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria, onToggleCSF}){
   const [uploading, setUploading] = useState(false);
-  const [fileName, setFileName] = useState("");
-  const [isCSF, setIsCSF] = useState(false);
+  const [progress, setProgress] = useState({current:0,total:0});
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
   const canEdit = role === "alonso";
   const canView = role === "alonso" || role === "notaria";
   if(!canView)return null;
   const expediente = p.expediente || [];
 
-  const handleFile = async (file) => {
-    if(!file)return;
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList||[]);
+    if(!files.length)return;
     setUploading(true);
-    const url = await uploadFile(p.id, file);
-    if(url){
-      const entry = {
-        id: `${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
-        nombre: fileName || file.name,
-        url,
-        tipo: file.type,
-        size: file.size,
-        uploaded_at: new Date().toISOString(),
-        uploaded_by: role,
-        es_csf_sociedad: isCSF,
-      };
-      await onAddFile(p.id, entry);
-      setFileName("");
-      setIsCSF(false);
-      if(fileInputRef.current) fileInputRef.current.value = "";
-    } else {
-      alert("Error al subir archivo. Revisa que el bucket 'expediente' esté configurado en Supabase Storage.");
+    setProgress({current:0,total:files.length});
+    for(let i=0;i<files.length;i++){
+      const file=files[i];
+      setProgress({current:i+1,total:files.length});
+      const url = await uploadFile(p.id, file);
+      if(url){
+        const entry = {
+          id: `${Date.now()}_${i}_${Math.random().toString(36).slice(2,8)}`,
+          nombre: file.name,
+          url,
+          tipo: file.type,
+          size: file.size,
+          uploaded_at: new Date().toISOString(),
+          uploaded_by: role,
+          es_csf_sociedad: false,
+        };
+        await onAddFile(p.id, entry);
+      } else {
+        alert(`Error al subir ${file.name}. Revisa que el bucket 'expediente' esté configurado.`);
+      }
     }
+    if(fileInputRef.current) fileInputRef.current.value = "";
     setUploading(false);
+    setProgress({current:0,total:0});
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    if(canEdit) handleFiles(e.dataTransfer.files);
   };
 
   const downloadAll = async () => {
     if(!expediente.length) return;
-    // Load JSZip from CDN dynamically
     if(!window.JSZip){
       await new Promise((resolve,reject)=>{
         const s=document.createElement("script");
@@ -910,7 +920,7 @@ function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria}){
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:14,fontWeight:700}}>📎 Expediente digital ({expediente.length})</div>
-          <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>{role==="alonso"?"Sube los documentos del expediente. La notaría los podrá descargar.":"Documentos cargados por Alonso y Cía"}</div>
+          <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>{role==="alonso"?"Sube los documentos del expediente. Arrastra archivos o selecciona múltiples. Marca la CSF de la sociedad con la estrella ⭐.":"Documentos cargados por Alonso y Cía"}</div>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {expediente.length>0&&<Bt v="g" onClick={downloadAll} style={{fontSize:11,padding:"6px 12px"}}>📥 Descargar todos (ZIP)</Bt>}
@@ -919,33 +929,49 @@ function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria}){
       </div>
 
       {canEdit&&(
-        <div style={{padding:12,borderRadius:10,background:"#f8f7f5",marginBottom:12}}>
-          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Subir nuevo archivo</div>
-          <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap",marginBottom:8}}>
-            <div style={{flex:1,minWidth:200}}>
-              <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Nombre del archivo (opcional)</div>
-              <input style={iS} value={fileName} onChange={e=>setFileName(e.target.value)} placeholder="Ej: CSF Sociedad.pdf"/>
+        <div
+          onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+          onDragLeave={()=>setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={()=>!uploading&&fileInputRef.current?.click()}
+          style={{padding:"22px 16px",borderRadius:10,background:dragOver?"#eff6ff":"#f8f7f5",border:`2px dashed ${dragOver?"#2563eb":"#d4d1ca"}`,marginBottom:12,textAlign:"center",cursor:uploading?"wait":"pointer",transition:"all 0.2s"}}
+        >
+          <input ref={fileInputRef} type="file" multiple onChange={e=>handleFiles(e.target.files)} disabled={uploading} style={{display:"none"}}/>
+          {uploading?(
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:"#2563eb"}}>⏳ Subiendo archivo {progress.current} de {progress.total}...</div>
+              <div style={{marginTop:10,height:6,background:"#e8e5df",borderRadius:6,overflow:"hidden"}}>
+                <div style={{height:"100%",background:"#2563eb",width:`${(progress.current/progress.total)*100}%`,transition:"width 0.3s"}}></div>
+              </div>
             </div>
-            <label style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-              <input type="checkbox" checked={isCSF} onChange={e=>setIsCSF(e.target.checked)} style={{width:16,height:16}}/>
-              Es CSF de sociedad
-            </label>
-          </div>
-          <input ref={fileInputRef} type="file" onChange={e=>handleFile(e.target.files?.[0])} disabled={uploading} style={{fontSize:12,fontFamily:"inherit"}}/>
-          {uploading&&<div style={{fontSize:12,color:"#2563eb",marginTop:6}}>Subiendo...</div>}
+          ):(
+            <>
+              <div style={{fontSize:30,marginBottom:6}}>📂</div>
+              <div style={{fontSize:13,fontWeight:600,color:"#1a1714"}}>Arrastra archivos aquí o haz clic para seleccionar</div>
+              <div style={{fontSize:11,color:"#8a857c",marginTop:4}}>Puedes subir varios archivos a la vez</div>
+            </>
+          )}
         </div>
       )}
 
       {!expediente.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin documentos cargados aún</div>:
         <div style={{display:"flex",flexDirection:"column",gap:5}}>
           {expediente.map((f)=>(
-            <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#f8f7f5"}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                  {f.es_csf_sociedad&&<span style={{color:"#7c3aed",marginRight:6}}>⭐</span>}
-                  {f.nombre}
+            <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:f.es_csf_sociedad?"#f5f3ff":"#f8f7f5",border:f.es_csf_sociedad?"1px solid #7c3aed40":"1px solid transparent"}}>
+              <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10}}>
+                {canEdit&&(
+                  <button onClick={()=>onToggleCSF(p.id,f.id)} title={f.es_csf_sociedad?"Quitar marca de CSF":"Marcar como CSF de sociedad"} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,padding:0,lineHeight:1}}>
+                    {f.es_csf_sociedad?"⭐":"☆"}
+                  </button>
+                )}
+                {!canEdit&&f.es_csf_sociedad&&<span style={{fontSize:18,lineHeight:1}}>⭐</span>}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {f.nombre}
+                    {f.es_csf_sociedad&&<span style={{fontSize:10,color:"#7c3aed",marginLeft:8,fontWeight:700}}>CSF SOCIEDAD</span>}
+                  </div>
+                  <div style={{fontSize:11,color:"#8a857c"}}>{fmtSize(f.size)} — Subido por {f.uploaded_by} el {fmt(f.uploaded_at.split("T")[0])}</div>
                 </div>
-                <div style={{fontSize:11,color:"#8a857c"}}>{fmtSize(f.size)} — Subido por {f.uploaded_by} el {fmt(f.uploaded_at.split("T")[0])}</div>
               </div>
               <div style={{display:"flex",gap:6}}>
                 <a href={f.url} download={f.nombre} target="_blank" rel="noopener noreferrer" style={{padding:"6px 12px",borderRadius:8,background:"#2563eb",color:"#fff",fontSize:11,fontWeight:600,textDecoration:"none",fontFamily:"inherit"}}>⬇ Descargar</a>
@@ -1533,6 +1559,27 @@ function AdminView({ps, onMarkPagado, onAddNotaCobranza, onSetFacturaNum, sessio
               <Bg bg="#f0fdf4" color="#16a34a">✓ Marcado como pagado por {sel.clientePagadoPor} el {sel.clientePagadoAt?fmt(sel.clientePagadoAt.split("T")[0]):"—"}</Bg>}
           </div>
 
+          {/* CSF de la sociedad - solo muestra el archivo marcado */}
+          {(()=>{
+            const csf=(sel.expediente||[]).find(f=>f.es_csf_sociedad);
+            return(
+              <div style={{padding:14,borderRadius:10,background:"#f5f3ff",border:"1px solid #7c3aed40",marginBottom:14}}>
+                <div style={{fontSize:13,fontWeight:700,marginBottom:8,color:"#7c3aed"}}>⭐ Constancia de Situación Fiscal de la sociedad</div>
+                {csf?(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#fff"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{csf.nombre}</div>
+                      <div style={{fontSize:11,color:"#8a857c"}}>Subido el {fmt(csf.uploaded_at.split("T")[0])}</div>
+                    </div>
+                    <a href={csf.url} download={csf.nombre} target="_blank" rel="noopener noreferrer" style={{padding:"6px 12px",borderRadius:8,background:"#7c3aed",color:"#fff",fontSize:11,fontWeight:600,textDecoration:"none",fontFamily:"inherit"}}>⬇ Descargar CSF</a>
+                  </div>
+                ):(
+                  <div style={{fontSize:12,color:"#8a857c",fontStyle:"italic"}}>Alonso y Cía aún no ha cargado la CSF de la sociedad para este proyecto.</div>
+                )}
+              </div>
+            );
+          })()}
+
           <NotasCobranzaPanel notas={sel.notasCobranza} onAdd={(n)=>onAddNotaCobranza(sel.id,n)} session={session}/>
         </div>
       )}
@@ -1849,6 +1896,23 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     enviarCorreoNotaria(p,notariaObj);
   },[notarias]);
 
+  const toggleCSF=useCallback(async(pid,fileId)=>{
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      const exp=(p.expediente||[]).map(f=>{
+        if(f.id===fileId)return{...f,es_csf_sociedad:!f.es_csf_sociedad};
+        // Si estamos marcando uno como CSF, desmarcamos los demás (solo puede haber uno)
+        if(f.es_csf_sociedad){
+          const target=(p.expediente||[]).find(x=>x.id===fileId);
+          if(target&&!target.es_csf_sociedad)return{...f,es_csf_sociedad:false};
+        }
+        return f;
+      });
+      save(pid,{expediente:exp});
+      return{...p,expediente:exp};
+    }));
+  },[]);
+
   // Mark factura solicitada (when user clicks email button)
   const markFacturaSolicitada=useCallback(async(pid)=>{
     const now=new Date().toISOString();
@@ -2089,7 +2153,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo}/>}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
-              <ExpedienteView p={sel} role={role} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria}/>
+              <ExpedienteView p={sel} role={role} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria} onToggleCSF={toggleCSF}/>
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
             </div>
           )}
