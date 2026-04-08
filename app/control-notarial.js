@@ -88,17 +88,76 @@ function calcRetraso(p, etapaId, inh){
   return bdBtw(venc,d.end,inh);
 }
 
-// Total accumulated delay for a project
+// Total accumulated delay for a project - measured at the last meaningful step
 function calcRetrasoTotal(p,inh){
   const et=getEt(p.tipo);
-  let total=0;
-  et.forEach(e=>{
-    if(e.plazo>0){
-      const r=calcRetraso(p,e.id,inh);
-      if(r>0)total+=r;
+  if(!p.etapas?.envio?.end)return 0;
+  let lastIdx = -1;
+  for(let i = et.length-1; i >= 0; i--){
+    const step = et[i];
+    if(step.id==="facturacion"||step.id==="pago")continue;
+    const d = p.etapas?.[step.id];
+    if(d?.done || (d?.start && !d?.done)){
+      lastIdx = i;
+      break;
     }
-  });
-  return total;
+  }
+  if(lastIdx<0)return 0;
+  const r = calcRetrasoAcumulado(p, et[lastIdx].id, inh);
+  return r > 0 ? r : 0;
+}
+
+// Compute "ideal" dates for each step in the pipeline.
+// The baseline is: fecha de cumplimiento de "envio" (when envío de expediente a notaría was really completed).
+// From that point forward, every step's ideal start and ideal end are calculated in cascade assuming every
+// step takes exactly its plazo in business days — no delays.
+// Returns { [etapaId]: { idealStart, idealVenc } }
+function computeIdealDates(p, inh){
+  const et = getEt(p.tipo);
+  const result = {};
+  const envioEnd = p.etapas?.envio?.end;
+  if(!envioEnd){
+    // Pipeline hasn't really started yet — no ideal dates can be computed
+    return result;
+  }
+  // Walk through steps after envio
+  const envioIdx = et.findIndex(e=>e.id==="envio");
+  let cursor = envioEnd; // cursor is the ideal end of the previous step
+  for(let i = envioIdx+1; i < et.length; i++){
+    const step = et[i];
+    // Skip special steps that don't use plazo in the normal way
+    if(step.id==="facturacion"||step.id==="pago"){
+      // For facturacion: ideal start = previous cursor, ideal end = same day (plazo 0)
+      // For pago: ideal start = factura date, ideal end = start + 2 bd. But we keep the cascade in cursor.
+      result[step.id] = { idealStart: cursor, idealVenc: cursor };
+      continue;
+    }
+    const idealStart = cursor;
+    const idealVenc = step.plazo > 0 ? addBD(idealStart, step.plazo, inh) : idealStart;
+    result[step.id] = { idealStart, idealVenc };
+    cursor = idealVenc; // next step should ideally start here
+  }
+  // Also include envio with its ideal = real (baseline)
+  result["envio"] = { idealStart: p.etapas?.envio?.start||envioEnd, idealVenc: envioEnd };
+  return result;
+}
+
+// Accumulated delay of the whole project at a given step (comparing real cumplimiento vs ideal vencimiento)
+// If step is not done yet, uses today vs ideal vencimiento to show if the project is already running late.
+function calcRetrasoAcumulado(p, etapaId, inh){
+  const ideal = computeIdealDates(p, inh);
+  const idealInfo = ideal[etapaId];
+  if(!idealInfo) return 0;
+  const d = p.etapas?.[etapaId];
+  if(d?.done && d?.end){
+    return bdBtw(idealInfo.idealVenc, d.end, inh);
+  }
+  // Not done: compare today vs ideal vencimiento if ideal has passed
+  const h = td();
+  if(h > idealInfo.idealVenc){
+    return bdBtw(idealInfo.idealVenc, h, inh);
+  }
+  return 0;
 }
 const td = () => new Date().toISOString().split("T")[0];
 function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return `${parseInt(p[2])} ${m[parseInt(p[1])-1]} ${p[0]}`; }
@@ -661,13 +720,17 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
         </div>
       )}
 
-      {etapas.map((e,i)=>{
+      {(()=>{
+        const idealDates = computeIdealDates(p, inh);
+        return etapas.map((e,i)=>{
         const d=p.etapas[e.id],info=getSt(p,i,inh);
         const isAct=i===p.step&&!p.finished;
         const canAct=isAct&&(role==="alonso"||e.owner==="notaria");
         const isFact=e.id==="facturacion",isPago=e.id==="pago",isFirma=e.id==="firma",isEnvio=e.id==="envio";
         const obs=p.observaciones?.[e.id];
         const hasObs=obs?.incompleta;
+        const ideal = idealDates[e.id];
+
 
         // Skip facturacion display if pago_efectivo
         if(isFact&&p.pagoEfectivo){
@@ -716,14 +779,36 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                     const venc=d.vencimiento||addBD(d.start,e.plazo,inh);
                     return <span style={{color:d?.done?"#8a857c":info.c,fontWeight:d?.done?500:700}}>Vence: {fmt(venc)}</span>;
                   })()}
+                  {/* Vencimiento ideal si difiere del real */}
+                  {!isPago&&!isFact&&e.plazo>0&&ideal&&ideal.idealVenc&&(()=>{
+                    const venc=d?.vencimiento||(d?.start?addBD(d.start,e.plazo,inh):null);
+                    if(!venc||venc===ideal.idealVenc)return null;
+                    return <span style={{color:"#8a857c",fontStyle:"italic"}}>(ideal: {fmt(ideal.idealVenc)})</span>;
+                  })()}
                   {/* Fecha de cumplimiento */}
                   {!isPago&&d?.end&&editingDate!==e.id&&<span style={{color:"#16a34a",fontWeight:600}}>✓ Cumplida: {fmt(d.end)}</span>}
-                  {/* Indicador de retraso */}
+                  {/* Indicador de retraso local + acumulado */}
                   {!isPago&&!isFact&&d?.done&&e.plazo>0&&(()=>{
-                    const r=calcRetraso(p,e.id,inh);
-                    if(r>0)return <span style={{color:"#dc2626",fontWeight:700}}>⚠ {r} día{r>1?"s":""} de retraso</span>;
-                    if(r===0)return <span style={{color:"#16a34a",fontWeight:600}}>✓ A tiempo</span>;
-                    return <span style={{color:"#16a34a",fontWeight:600}}>✓ {Math.abs(r)} día{Math.abs(r)>1?"s":""} antes</span>;
+                    const rLocal=calcRetraso(p,e.id,inh);
+                    const rAcum=calcRetrasoAcumulado(p,e.id,inh);
+                    const parts=[];
+                    if(rLocal>0){
+                      parts.push(<span key="local" style={{color:"#dc2626",fontWeight:700}}>⚠ {rLocal} día{rLocal>1?"s":""} de retraso local</span>);
+                    }else if(rLocal===0){
+                      parts.push(<span key="local" style={{color:"#16a34a",fontWeight:600}}>✓ A tiempo local</span>);
+                    }else{
+                      parts.push(<span key="local" style={{color:"#16a34a",fontWeight:600}}>✓ {Math.abs(rLocal)} día{Math.abs(rLocal)>1?"s":""} antes</span>);
+                    }
+                    if(rAcum>0){
+                      parts.push(<span key="acum" style={{color:"#dc2626",fontWeight:700}}>• ⚠ Proyecto con {rAcum} día{rAcum>1?"s":""} de retraso acumulado</span>);
+                    }
+                    return <>{parts}</>;
+                  })()}
+                  {/* Si no está cumplida todavía y el proyecto ya va retrasado vs el ideal */}
+                  {!isPago&&!isFact&&!d?.done&&isAct&&e.plazo>0&&(()=>{
+                    const rAcum=calcRetrasoAcumulado(p,e.id,inh);
+                    if(rAcum>0)return <span style={{color:"#dc2626",fontWeight:700}}>⚠ Proyecto con {rAcum} día{rAcum>1?"s":""} de retraso acumulado</span>;
+                    return null;
                   })()}
                   {/* Edit fecha cumplimiento - alonso, completed steps */}
                   {!isPago&&!isFact&&d?.done&&role==="alonso"&&editingDate!==e.id&&(
@@ -839,7 +924,8 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
             {i<etapas.length-1&&<div style={{marginLeft:30,height:6,borderLeft:`2px ${i<p.step?"solid":"dashed"} ${i<p.step?"#16a34a":"#e8e5df"}`}}/>}
           </div>
         );
-      })}
+      });
+      })()}
     </div>
   );
 }
@@ -1031,8 +1117,30 @@ function EffPanel({ps,inh,inhFor,notarias,filtNot}){
   if(!done.length)return <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:40,textAlign:"center"}}><div style={{fontSize:40,marginBottom:10}}>📊</div><div style={{fontSize:14,fontWeight:600}}>Sin proyectos completados</div></div>;
   const calc=(owner)=>{
     let ts=0,tc=0;
-    const details=done.map(p=>{const et=getEt(p.tipo);let ps2=0,pc=0;
-      et.forEach(e=>{if(e.owner!==owner)return;const d=p.etapas[e.id];const pInh=inhFor?inhFor(p.notariaId):inh;const start=(e.id==="pago"&&p.factDate)?p.factDate:d?.start;const end=(e.id==="pago"&&p.pagoDate)?p.pagoDate:d?.end;const plazo=e.id==="pago"?2:e.plazo;if(plazo>0&&start&&end){const real=bdBtw(start,end,pInh);let sc=real<=plazo?100:Math.max(0,100-(real-plazo)*25);if(p.observaciones?.[e.id]?.incompleta)sc=Math.max(0,sc-30);ps2+=sc;pc++;ts+=sc;tc++;}});
+    const details=done.map(p=>{
+      const et=getEt(p.tipo);
+      const pInh=inhFor?inhFor(p.notariaId):inh;
+      const idealDates=computeIdealDates(p,pInh);
+      let ps2=0,pc=0;
+      et.forEach(e=>{
+        if(e.owner!==owner)return;
+        const d=p.etapas[e.id];
+        const start=(e.id==="pago"&&p.factDate)?p.factDate:d?.start;
+        const end=(e.id==="pago"&&p.pagoDate)?p.pagoDate:d?.end;
+        const plazo=e.id==="pago"?2:e.plazo;
+        if(plazo>0&&start&&end){
+          // Local delay vs own vencimiento
+          const realLocal=bdBtw(start,end,pInh);
+          // Accumulated delay vs ideal vencimiento
+          const idealV=idealDates[e.id]?.idealVenc;
+          const realAcum=idealV?bdBtw(idealV,end,pInh):realLocal;
+          // Use the worse of the two (whichever is more negative for the owner)
+          const diff=Math.max(realLocal-plazo,realAcum);
+          let sc=diff<=0?100:Math.max(0,100-diff*25);
+          if(p.observaciones?.[e.id]?.incompleta)sc=Math.max(0,sc-30);
+          ps2+=sc;pc++;ts+=sc;tc++;
+        }
+      });
       return{name:p.name,score:pc>0?Math.round(ps2/pc):100,date:p.finDate};
     });
     return{global:tc>0?Math.round(ts/tc):100,details};
@@ -1048,7 +1156,7 @@ function EffPanel({ps,inh,inhFor,notarias,filtNot}){
     </div>
   );
   const notName=filtNot?notarias.find(n=>n.id===filtNot)?.name||"Notaría":"Todas las notarías";
-  return <div><div style={{fontSize:16,fontWeight:700,marginBottom:4}}>📊 Efectividad — {notName}</div><div style={{fontSize:12,color:"#8a857c",marginBottom:18}}>Calificación 0–100. Cada día hábil de retraso descuenta 25 pts. Etapas marcadas como incompletas descuentan 30 pts.</div><div style={{display:"flex",gap:16,flexWrap:"wrap"}}><Blk label="Alonso y Cía" icon="⚖️" data={a}/><Blk label={notName} icon="📜" data={n}/></div></div>;
+  return <div><div style={{fontSize:16,fontWeight:700,marginBottom:4}}>📊 Efectividad — {notName}</div><div style={{fontSize:12,color:"#8a857c",marginBottom:18}}>Calificación 0–100. Cada día hábil de retraso descuenta 25 pts (considerando retraso local y acumulado). Etapas marcadas como incompletas descuentan 30 pts.</div><div style={{display:"flex",gap:16,flexWrap:"wrap"}}><Blk label="Alonso y Cía" icon="⚖️" data={a}/><Blk label={notName} icon="📜" data={n}/></div></div>;
 }
 
 // ═══════════════════════════════════════════════════════════════
