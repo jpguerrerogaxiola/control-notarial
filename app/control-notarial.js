@@ -198,6 +198,7 @@ function dbToApp(r){
     pagoEfectivo:r.pago_efectivo||false,numEscritura:r.num_escritura||"",
     observaciones:r.observaciones||{},notas:r.notas||[],archivado:r.archivado||false,
     facturaSolicitada:r.factura_solicitada||false,facturaSolicitadaAt:r.factura_solicitada_at,
+    facturaEmitidaNum:r.factura_emitida_num||"",facturaEmitidaAt:r.factura_emitida_at,
     clientePagado:r.cliente_pagado||false,clientePagadoAt:r.cliente_pagado_at,clientePagadoPor:r.cliente_pagado_por||"",
     notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[]};
 }
@@ -259,9 +260,10 @@ function enviarCorreoCobranza(p){
   const cc="j.rojas@alonsoycia.com.mx,juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx";
   const subject=`Seguimiento de cobranza — ${p.name} ${p.cliente||""}`;
   const neto=p.cliFacturaNeto?`$${p.cliFacturaNeto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
+  const proyectoConcepto=p.cliFacturaConcepto||generarConcepto(p);
   const body=`Hola Elo, ¿nos podrías ayudar por favor a presionar al cliente con el pago de la factura del proyecto que se indica a continuación?
 
-Proyecto: ${p.name}
+Proyecto: ${proyectoConcepto}
 Cliente: ${p.cliente||"—"}
 Monto: ${neto}${p.cliFacturaEnviarA?`
 Contacto del cliente: ${p.cliFacturaEnviarA}`:""}
@@ -521,16 +523,15 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
             )}
 
             {/* Show verificacion de pago panel */}
-            {e.id==="verif_pago"&&(isAct||isDone)&&(
+            {e.id==="verif_pago"&&(isAct||isDone||p.cliPagoTipo)&&(
               <div style={{marginTop:8,marginLeft:48,padding:14,borderRadius:10,background:p.clientePagado?"#f0fdf4":"#fffbeb",border:`1px solid ${p.clientePagado?"#16a34a":"#fde68a"}40`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                   <div>
                     <div style={{fontSize:13,fontWeight:700,color:p.clientePagado?"#16a34a":"#92400e"}}>{p.clientePagado?"✓ Cliente pagó":"⏳ Pendiente de pago del cliente"}</div>
                     {p.clientePagado&&p.clientePagadoPor&&<div style={{fontSize:11,color:"#8a857c",marginTop:3}}>Marcado por {p.clientePagadoPor}{p.clientePagadoAt?` — ${fmt(p.clientePagadoAt.split("T")[0])}`:""}</div>}
-                    {!p.clientePagado&&!p.facturaSolicitada&&p.cliPagoTipo&&p.cliPagoTipo!=="efectivo"&&<div style={{fontSize:11,color:"#8a857c",marginTop:3}}>Primero envía la solicitud de factura</div>}
                   </div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                    {!p.clientePagado&&p.facturaSolicitada&&<Bt v="w" onClick={()=>enviarCorreoCobranza(p)} style={{fontSize:11,padding:"6px 12px"}}>📧 Pedir presionar a cliente</Bt>}
+                    {!p.clientePagado&&<Bt v="w" onClick={()=>enviarCorreoCobranza(p)} style={{fontSize:11,padding:"6px 12px"}}>📧 Pedir presionar a cliente</Bt>}
                     {!p.clientePagado&&<Bt v="p" onClick={()=>onMarkClientePagado(p.id)} style={{fontSize:12,padding:"7px 14px"}}>✓ Verificar pago</Bt>}
                     {p.clientePagado&&<Bt v="w" onClick={()=>onUndoClientePagado(p.id)} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>}
                   </div>
@@ -765,6 +766,134 @@ function EffPanel({ps,inh,inhFor,notarias,filtNot}){
   );
   const notName=filtNot?notarias.find(n=>n.id===filtNot)?.name||"Notaría":"Todas las notarías";
   return <div><div style={{fontSize:16,fontWeight:700,marginBottom:4}}>📊 Efectividad — {notName}</div><div style={{fontSize:12,color:"#8a857c",marginBottom:18}}>Calificación 0–100. Cada día hábil de retraso descuenta 25 pts. Etapas marcadas como incompletas descuentan 30 pts.</div><div style={{display:"flex",gap:16,flexWrap:"wrap"}}><Blk label="Alonso y Cía" icon="⚖️" data={a}/><Blk label={notName} icon="📜" data={n}/></div></div>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COBRANZA PANEL (control financiero alonso)
+// ═══════════════════════════════════════════════════════════════
+function CobranzaPanel({ps, notarias, filtNot, onSelect}){
+  const fp=filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
+  // Solo proyectos con factura solicitada o con tipo de pago definido
+  const conFactura=fp.filter(p=>p.cliPagoTipo&&p.cliPagoTipo!=="efectivo");
+  const totalFacturado=conFactura.reduce((acc,p)=>acc+(p.cliFacturaNeto||0),0);
+  const totalCobrado=conFactura.filter(p=>p.clientePagado).reduce((acc,p)=>acc+(p.cliFacturaNeto||0),0);
+  const totalPendiente=totalFacturado-totalCobrado;
+  const recienPagados=conFactura.filter(p=>p.clientePagado&&!p.preDone);
+  const pendientesCobro=conFactura.filter(p=>!p.clientePagado&&p.facturaSolicitada);
+  const sinSolicitar=conFactura.filter(p=>!p.facturaSolicitada);
+
+  // By month chart
+  const byMonth={};
+  conFactura.forEach(p=>{
+    if(p.facturaSolicitadaAt){
+      const m=p.facturaSolicitadaAt.substring(0,7);
+      if(!byMonth[m])byMonth[m]={facturado:0,cobrado:0};
+      byMonth[m].facturado+=p.cliFacturaNeto||0;
+      if(p.clientePagado)byMonth[m].cobrado+=p.cliFacturaNeto||0;
+    }
+  });
+  const months=Object.keys(byMonth).sort();
+  const maxMonth=Math.max(...Object.values(byMonth).map(v=>v.facturado),1);
+
+  const fmtMoney=(n)=>`$${(n||0).toLocaleString("es-MX",{minimumFractionDigits:2})}`;
+
+  return(
+    <div>
+      {/* Stats financieros */}
+      <div style={{display:"flex",gap:13,marginBottom:20,flexWrap:"wrap"}}>
+        <Stat label="Total facturado" value={fmtMoney(totalFacturado)} icon="📄" accent="#2563eb"/>
+        <Stat label="Total cobrado" value={fmtMoney(totalCobrado)} icon="✅" accent="#16a34a"/>
+        <Stat label="Por cobrar" value={fmtMoney(totalPendiente)} icon="⏳" accent="#d97706" sub={pendientesCobro.length>0?`${pendientesCobro.length} pendientes`:""}/>
+        <Stat label="Sin solicitar" value={sinSolicitar.length} icon="📋" accent="#7c3aed"/>
+      </div>
+
+      {/* Recién pagados - notificación */}
+      {recienPagados.length>0&&(
+        <div style={{background:"#f0fdf4",borderRadius:14,border:"1px solid #16a34a40",padding:18,marginBottom:20}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:10,color:"#16a34a"}}>🎉 Clientes que ya pagaron — listos para enviar a notaría ({recienPagados.length})</div>
+          {recienPagados.map(p=>(
+            <div key={p.id} onClick={()=>onSelect(p.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px",borderRadius:10,background:"#fff",marginBottom:6,cursor:"pointer",border:"1px solid #16a34a30"}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600}}>{p.name} — {p.cliente}</div>
+                <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Pagado por {p.clientePagadoPor}{p.clientePagadoAt?` el ${fmt(p.clientePagadoAt.split("T")[0])}`:""} — {fmtMoney(p.cliFacturaNeto)}</div>
+              </div>
+              <Bg bg="#f0fdf4" color="#16a34a">✓ Listo para notaría</Bg>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pendientes de cobro */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:18,marginBottom:18}}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:10}}>⏳ Pendientes de cobro ({pendientesCobro.length})</div>
+        {!pendientesCobro.length?<div style={{fontSize:13,color:"#8a857c",textAlign:"center",padding:14}}>Sin pendientes</div>:
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {pendientesCobro.map(p=>{
+              const dias=p.facturaSolicitadaAt?Math.floor((Date.now()-new Date(p.facturaSolicitadaAt).getTime())/(1000*60*60*24)):0;
+              const color=dias>=5?"#dc2626":dias>=2?"#d97706":"#2563eb";
+              return(
+                <div key={p.id} onClick={()=>onSelect(p.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#f8f7f5",cursor:"pointer"}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600}}>{p.name} — {p.cliente}</div>
+                    <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Solicitada hace {dias} día{dias!==1?"s":""}{p.facturaEmitidaNum?` — Factura ${p.facturaEmitidaNum}`:""}</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:14,fontWeight:700,color}}>{fmtMoney(p.cliFacturaNeto)}</span>
+                    {dias>=5&&<Bg bg="#fef2f2" color="#dc2626">URGENTE</Bg>}
+                    {dias>=2&&dias<5&&<Bg bg="#fffbeb" color="#d97706">Atención</Bg>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        }
+      </div>
+
+      {/* Sin solicitar */}
+      {sinSolicitar.length>0&&(
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:18,marginBottom:18}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:10}}>📋 Pendientes de solicitar factura ({sinSolicitar.length})</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {sinSolicitar.map(p=>(
+              <div key={p.id} onClick={()=>onSelect(p.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#f8f7f5",cursor:"pointer"}}>
+                <div><div style={{fontSize:13,fontWeight:600}}>{p.name} — {p.cliente}</div><div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Tipo: {p.cliPagoTipo}</div></div>
+                <span style={{fontSize:14,fontWeight:700,color:"#7c3aed"}}>{fmtMoney(p.cliFacturaNeto)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Gráfica por mes */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:22,marginBottom:18}}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:14}}>Facturado vs Cobrado por mes</div>
+        {!months.length?<div style={{fontSize:13,color:"#8a857c",textAlign:"center",padding:20}}>Sin datos aún</div>:
+          <div style={{display:"flex",alignItems:"flex-end",gap:14,height:240,paddingTop:20}}>
+            {months.map(m=>{
+              const v=byMonth[m];
+              return(
+                <div key={m} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+                  <div style={{display:"flex",gap:3,alignItems:"flex-end",height:170,width:"100%",justifyContent:"center"}}>
+                    <div style={{width:"40%",background:"#2563eb",borderRadius:"6px 6px 0 0",height:`${(v.facturado/maxMonth)*170}px`,minHeight:4,position:"relative"}}>
+                      <div style={{position:"absolute",top:-18,left:"50%",transform:"translateX(-50%)",fontSize:9,fontWeight:700,color:"#2563eb",whiteSpace:"nowrap"}}>${(v.facturado/1000).toFixed(0)}k</div>
+                    </div>
+                    <div style={{width:"40%",background:"#16a34a",borderRadius:"6px 6px 0 0",height:`${(v.cobrado/maxMonth)*170}px`,minHeight:4,position:"relative"}}>
+                      <div style={{position:"absolute",top:-18,left:"50%",transform:"translateX(-50%)",fontSize:9,fontWeight:700,color:"#16a34a",whiteSpace:"nowrap"}}>${(v.cobrado/1000).toFixed(0)}k</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:"#8a857c",fontWeight:600}}>{m}</div>
+                </div>
+              );
+            })}
+          </div>
+        }
+        <div style={{display:"flex",gap:14,justifyContent:"center",marginTop:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:12,background:"#2563eb",borderRadius:3}}></div><span style={{fontSize:11}}>Facturado</span></div>
+          <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:12,background:"#16a34a",borderRadius:3}}></div><span style={{fontSize:11}}>Cobrado</span></div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1078,7 +1207,7 @@ function Cfm({msg,onYes,onNo}){return <div style={{position:"fixed",inset:0,back
 // ═══════════════════════════════════════════════════════════════
 // ADMIN VIEW (perfil administración)
 // ═══════════════════════════════════════════════════════════════
-function AdminView({ps, onMarkPagado, onAddNotaCobranza, session}){
+function AdminView({ps, onMarkPagado, onAddNotaCobranza, onSetFacturaNum, session}){
   const [selId, setSelId] = useState(null);
   const [filt, setFilt] = useState("pendientes"); // pendientes | pagados | todos
   // Solo proyectos donde se mandó solicitud de factura
@@ -1129,7 +1258,14 @@ function AdminView({ps, onMarkPagado, onAddNotaCobranza, session}){
               <div><div style={{fontSize:11,color:"#8a857c",fontWeight:600}}>IVA 16%</div><div style={{fontSize:14,fontWeight:700}}>${((sel.cliFacturaBruto||0)*0.16).toLocaleString("es-MX",{minimumFractionDigits:2})}</div></div>
               <div><div style={{fontSize:11,color:"#8a857c",fontWeight:600}}>Monto neto</div><div style={{fontSize:14,fontWeight:700,color:"#2563eb"}}>${(sel.cliFacturaNeto||0).toLocaleString("es-MX",{minimumFractionDigits:2})}</div></div>
             </div>
-            <div><div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Concepto</div><div style={{fontSize:12,padding:"8px 10px",background:"#fff",borderRadius:6,border:"1px solid #e8e5df"}}>{sel.cliFacturaConcepto||generarConcepto(sel)}</div></div>
+            <div style={{marginBottom:10}}><div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Concepto</div><div style={{fontSize:12,padding:"8px 10px",background:"#fff",borderRadius:6,border:"1px solid #e8e5df"}}>{sel.cliFacturaConcepto||generarConcepto(sel)}</div></div>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Número de factura emitida</div>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <input style={{...iS,maxWidth:240}} value={sel.facturaEmitidaNum||""} onChange={ev=>onSetFacturaNum(sel.id,ev.target.value)} placeholder="Ej: A-1234"/>
+                {sel.facturaEmitidaAt&&<span style={{fontSize:11,color:"#8a857c"}}>Emitida {fmt(sel.facturaEmitidaAt.split("T")[0])}</span>}
+              </div>
+            </div>
             <div style={{fontSize:11,color:"#8a857c",marginTop:8}}>Solicitud enviada: {sel.facturaSolicitadaAt?new Date(sel.facturaSolicitadaAt).toLocaleString("es-MX",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—"}</div>
           </div>
 
@@ -1301,6 +1437,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("name"in upd)d.name=upd.name;if("cliente"in upd)d.cliente=upd.cliente;if("fechaActo"in upd)d.fecha_acto=upd.fechaActo;
     if("facturaSolicitada"in upd)d.factura_solicitada=upd.facturaSolicitada;
     if("facturaSolicitadaAt"in upd)d.factura_solicitada_at=upd.facturaSolicitadaAt;
+    if("facturaEmitidaNum"in upd)d.factura_emitida_num=upd.facturaEmitidaNum;
+    if("facturaEmitidaAt"in upd)d.factura_emitida_at=upd.facturaEmitidaAt;
     if("clientePagado"in upd)d.cliente_pagado=upd.clientePagado;
     if("clientePagadoAt"in upd)d.cliente_pagado_at=upd.clientePagadoAt;
     if("clientePagadoPor"in upd)d.cliente_pagado_por=upd.clientePagadoPor;
@@ -1440,6 +1578,16 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     }));
   },[session]);
 
+  const setFacturaNum=useCallback(async(pid,num)=>{
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      const now=new Date().toISOString();
+      const log=[...(p.facturaLog||[]),{fecha:now,evento:`Factura emitida: ${num}`,autor:session.label}];
+      save(pid,{facturaEmitidaNum:num,facturaEmitidaAt:now,facturaLog:log});
+      return{...p,facturaEmitidaNum:num,facturaEmitidaAt:now,facturaLog:log};
+    }));
+  },[session]);
+
   const create=useCallback(async(f)=>{
     const isPast=f.fecha<td();
     const etapas=isPast?mkEtapasPast(f.tipo,f.fecha):mkEtapas(f.tipo,f.fecha);
@@ -1447,7 +1595,11 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     const checklist=getChecklistTemplate(f.escenario);
     const preEtapas=mkPreEtapas();
     const row=await db.createProject({name:f.nombre,cliente:f.cliente||"",tipo:f.tipo,escenario:f.escenario,step,created:f.fecha,fecha_acto:f.fechaActo||null,etapas,fact_sent:false,pago_marcado:false,resp_notaria:"",finished:false,notaria_id:f.notariaId,checklist,pre_etapas:preEtapas,pre_step:0,pre_done:false,pago_efectivo:false,observaciones:{},notas:[]});
-    if(row)setPs(prev=>[dbToApp(row[0]),...prev]);
+    if(row){
+      const newProject=dbToApp(row[0]);
+      setPs(prev=>[newProject,...prev]);
+      setSelId(newProject.id);
+    }
     setShowForm(false);
   },[]);
 
@@ -1509,7 +1661,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
           <button onClick={onLogout} style={{padding:"7px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"transparent",color:"#8a857c",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
         </div>
         <div style={{padding:"22px 26px",maxWidth:1180,margin:"0 auto"}}>
-          <AdminView ps={ps} onMarkPagado={markClientePagado} onAddNotaCobranza={addNotaCobranza} session={session}/>
+          <AdminView ps={ps} onMarkPagado={markClientePagado} onAddNotaCobranza={addNotaCobranza} onSetFacturaNum={setFacturaNum} session={session}/>
         </div>
       </div>
     );
@@ -1536,7 +1688,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
           <button onClick={onLogout} style={{padding:"7px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"transparent",color:"#8a857c",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
         </div>
         <div style={{display:"flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
-          {tab("dashboard","Panel")}{tab("proyectos","Proyectos")}{tab("calendario_p","Calendario")}{tab("efectividad","Efectividad")}{tab("metricas","Métricas")}{tab("dias","Días inhábiles")}
+          {tab("dashboard","Panel")}{tab("proyectos","Proyectos")}{tab("cobranza","💰 Cobranza")}{tab("calendario_p","Calendario")}{tab("efectividad","Efectividad")}{tab("metricas","Métricas")}{tab("dias","Días inhábiles")}
           {role==="alonso"&&tab("notarias","Notarías")}
           <Bell alerts={alerts} role={role} nid={nid}/>
           {role==="alonso"&&<Bt onClick={()=>{setShowForm(true);setVista("proyectos");}} style={{marginLeft:5,fontSize:12,padding:"7px 14px"}}>+ Nuevo</Bt>}
@@ -1546,6 +1698,24 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
       <div style={{padding:"22px 26px",maxWidth:1180,margin:"0 auto"}}>
         {vista==="dashboard"&&<>
           <div style={{display:"flex",gap:13,marginBottom:20,flexWrap:"wrap"}}><Stat label="Activos" value={act} icon="📂" accent="#2563eb"/><Stat label="Tu turno" value={mt} icon="👆" accent="#d97706" sub={mt>0?"Acción requerida":""}/><Stat label="Vencidos" value={ov} icon="🔴" accent="#dc2626" sub={ov>0?"Urgente":""}/><Stat label="Completados" value={comp} icon="✅" accent="#16a34a"/></div>
+
+          {/* Clientes recién pagados - listos para notaría */}
+          {(()=>{
+            const pagadosListos=visiblePs.filter(p=>p.clientePagado&&!p.preDone&&p.cliPagoTipo&&p.cliPagoTipo!=="efectivo");
+            if(!pagadosListos.length)return null;
+            return(
+              <div style={{background:"#f0fdf4",borderRadius:14,border:"1px solid #16a34a40",padding:16,marginBottom:18}}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:8,color:"#16a34a"}}>🎉 Clientes que ya pagaron — listos para enviar a notaría ({pagadosListos.length})</div>
+                {pagadosListos.map(p=>(
+                  <div key={p.id} onClick={()=>{setSelId(p.id);setVista("proyectos");}} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,marginBottom:5,cursor:"pointer",background:"#fff",border:"1px solid #16a34a30"}}>
+                    <div><div style={{fontSize:13,fontWeight:600}}>✓ {p.name}{p.cliente&&<span style={{color:"#8a857c",marginLeft:6}}>— {p.cliente}</span>}</div><div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Pagado por {p.clientePagadoPor}{p.clientePagadoAt?` el ${fmt(p.clientePagadoAt.split("T")[0])}`:""}</div></div>
+                    <Bg bg="#f0fdf4" color="#16a34a">Continuar trámite</Bg>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
           {(role==="alonso"?alerts:alerts.filter(a=>a.owner==="notaria"&&a.nid===nid)).length>0&&(
             <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:18,marginBottom:20}}>
               <div style={{fontSize:14,fontWeight:700,marginBottom:10}}>🔔 Alertas</div>
@@ -1632,6 +1802,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
           </div>
         </>}
 
+        {vista==="cobranza"&&<CobranzaPanel ps={baseVisiblePs} notarias={notarias} filtNot={filtNot} onSelect={(id)=>{setSelId(id);setVista("proyectos");}}/>}
         {vista==="calendario_p"&&<CalView ps={baseVisiblePs} inh={inh} inhFor={inhFor} onSelect={(id)=>{setSelId(id);setVista("proyectos");}}/>}
         {vista==="efectividad"&&<EffPanel ps={ps} inh={inh} inhFor={inhFor} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
         {vista==="metricas"&&<MetricsPanel ps={ps} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
