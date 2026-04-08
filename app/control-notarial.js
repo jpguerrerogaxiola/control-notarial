@@ -77,6 +77,12 @@ function getChecklistTemplate(escenario) {
         { id: "csf_soc", label: "Constancia situación fiscal sociedad", antiguedad: "≤3 meses", done: false },
         { id: "personalidad", label: "Personalidad de la sociedad", antiguedad: "", done: false },
       ]},
+      socio_1: { label: "Socio 1", docs: [
+        { id: "csf_socio", label: "Constancia situación fiscal socio", antiguedad: "≤3 meses", done: false },
+      ]},
+      socio_2: { label: "Socio 2", docs: [
+        { id: "csf_socio", label: "Constancia situación fiscal socio", antiguedad: "≤3 meses", done: false },
+      ]},
     };
   }
   if (escenario === "acta_externo") {
@@ -84,6 +90,12 @@ function getChecklistTemplate(escenario) {
       sociedad: { label: "Sociedad", docs: [
         { id: "csf_soc", label: "Constancia situación fiscal sociedad", antiguedad: "≤3 meses", done: false },
         { id: "personalidad", label: "Personalidad de la sociedad", antiguedad: "", done: false },
+      ]},
+      socio_1: { label: "Socio 1", docs: [
+        { id: "csf_socio", label: "Constancia situación fiscal socio", antiguedad: "≤3 meses", done: false },
+      ]},
+      socio_2: { label: "Socio 2", docs: [
+        { id: "csf_socio", label: "Constancia situación fiscal socio", antiguedad: "≤3 meses", done: false },
       ]},
       persona_externa: { label: "Persona externa que firma", docs: DOC_PERSONA.map(d => ({ ...d, done: false })) },
     };
@@ -172,11 +184,14 @@ function mkPreEtapas(){
 
 function dbToApp(r){
   return{id:r.id,name:r.name,cliente:r.cliente||"",tipo:r.tipo,escenario:r.escenario||"acta_interno",
-    step:r.step,created:r.created,factSent:r.fact_sent,factDate:r.fact_date,
+    step:r.step,created:r.created,fechaActo:r.fecha_acto,
+    factSent:r.fact_sent,factDate:r.fact_date,
     pagoMarcado:r.pago_marcado,pagoDate:r.pago_date,respNotaria:r.resp_notaria||"",etapas:r.etapas,
     finished:r.finished,finDate:r.fin_date,notariaId:r.notaria_id,
     checklist:r.checklist||{},preEtapas:r.pre_etapas||{},preStep:r.pre_step||0,preDone:r.pre_done||false,
     cliPagoTipo:r.cli_pago_tipo||"",cliFacturaNum:r.cli_factura_num||"",cliFacturaMonto:r.cli_factura_monto,
+    cliFacturaConcepto:r.cli_factura_concepto||"",cliFacturaEnviarA:r.cli_factura_enviar_a||"",
+    cliFacturaBruto:r.cli_factura_bruto,cliFacturaNeto:r.cli_factura_neto,
     pagoEfectivo:r.pago_efectivo||false,numEscritura:r.num_escritura||"",
     observaciones:r.observaciones||{},notas:r.notas||[],archivado:r.archivado||false};
 }
@@ -187,7 +202,7 @@ function dbToApp(r){
 function buildAlerts(ps,inh,inhFor){
   const a=[];
   ps.forEach(p=>{
-    if(p.archivado||!p.preDone)return;
+    if(!p.preDone)return;
     const et=getEt(p.tipo),pInh=inhFor?inhFor(p.notariaId):inh;
     if(p.finished||p.step>=et.length)return;
     const e=et[p.step],info=getSt(p,p.step,pInh);
@@ -195,6 +210,40 @@ function buildAlerts(ps,inh,inhFor){
     if(p.factSent&&!p.pagoMarcado&&!p.pagoEfectivo){const pv=addBD(p.factDate,2,pInh);if(pv){const h=td();if(h>pv)a.push({id:`${p.id}-pago-over`,tipo:"vencida",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});else if(bdBtw(h,pv,pInh)<=1)a.push({id:`${p.id}-pago-soon`,tipo:"por_vencer",proj:p.name,pid:p.id,etapa:"Pago a notaría",owner:"alonso",v:pv,respN:p.respNotaria,nid:p.notariaId});}}
   });
   return a;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FACTURA HELPERS
+// ═══════════════════════════════════════════════════════════════
+function generarConcepto(p){
+  const articulos={"Acta de Asamblea":"del Acta de Asamblea","Constitución de Sociedad":"de la Constitución de Sociedad","Compraventa":"de la Compraventa"};
+  const art=articulos[p.name]||`del ${p.name}`;
+  let concepto=`Seguimiento para la formalización ante fedatario público ${art}`;
+  if(p.name!=="Compraventa"&&p.cliente)concepto+=` de la Sociedad ${p.cliente}`;
+  if(p.fechaActo)concepto+=`, celebrada el ${fmt(p.fechaActo)}`;
+  return concepto;
+}
+
+function enviarCorreoFactura(p){
+  const to="administración@alonsoycia.com.mx";
+  const cc="j.rojas@alonsoycia.com.mx,juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx";
+  const subject=`Solicitud de CFDI — ${p.name} ${p.cliente||""}`;
+  const bruto=p.cliFacturaBruto?`$${p.cliFacturaBruto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
+  const neto=p.cliFacturaNeto?`$${p.cliFacturaNeto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
+  const concepto=p.cliFacturaConcepto||generarConcepto(p);
+  const body=`Elo, buen día, te pido por favor nos ayudes a emitir un CFDI con las siguientes características:
+
+Cliente: ${p.cliente||"—"}
+Concepto: ${concepto}
+Monto bruto: ${bruto}
+Monto neto (con IVA): ${neto}
+Enviar a: ${p.cliFacturaEnviarA||"—"}
+
+Muchas gracias.
+
+Saludos.`;
+  const url=`mailto:${encodeURIComponent(to)}?cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href=url;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -323,20 +372,23 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
   const [dateVal, setDateVal] = useState("");
   const [showObsFor, setShowObsFor] = useState(null);
   const [obsText, setObsText] = useState("");
-  const [showPagoInfo, setShowPagoInfo] = useState(false);
+  const [collapsed, setCollapsed] = useState(p.preDone);
   if(role!=="alonso")return null;
 
   return(
     <div style={{marginBottom:18,padding:18,borderRadius:14,background:"#fefdfb",border:"1px solid #e8e5df"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:collapsed?0:14,cursor:p.preDone?"pointer":"default"}} onClick={()=>p.preDone&&setCollapsed(!collapsed)}>
         <div>
-          <div style={{fontSize:14,fontWeight:700}}>🏢 Flujo previo de Alonso y Cía</div>
+          <div style={{fontSize:14,fontWeight:700}}>🏢 Flujo previo de Alonso y Cía {p.preDone&&<Bg bg="#f0fdf4" color="#16a34a" style={{marginLeft:6}}>✓ Completado</Bg>}</div>
           <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Pasos internos antes de enviar a notaría — invisible para la notaría</div>
         </div>
-        <Bg bg="#eff6ff" color="#2563eb">Solo Alonso</Bg>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <Bg bg="#eff6ff" color="#2563eb">Solo Alonso</Bg>
+          {p.preDone&&<button style={{background:"none",border:"none",color:"#8a857c",cursor:"pointer",fontSize:18,fontWeight:700}}>{collapsed?"▼":"▲"}</button>}
+        </div>
       </div>
 
-      {PRE_ETAPAS.map((e,i)=>{
+      {!collapsed&&PRE_ETAPAS.map((e,i)=>{
         const d=p.preEtapas[e.id]||{};
         const isAct=i===p.preStep&&!p.preDone;
         const isDone=d.done||i<p.preStep;
@@ -380,10 +432,10 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
               </div>
             </div>
 
-            {/* Show checklist when on expediente step */}
-            {e.id==="expediente"&&isAct&&(
+            {/* Show checklist when on expediente step (active or done) */}
+            {e.id==="expediente"&&(isAct||isDone)&&(
               <div style={{marginTop:8,marginLeft:48,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
-                <ChecklistView checklist={p.checklist} escenario={p.escenario}
+                <ChecklistView checklist={p.checklist} escenario={p.escenario} readOnly={isDone&&!isAct&&p.preDone}
                   onAddGroup={(name)=>{const id="grupo_"+Date.now();const nl={...p.checklist,[id]:{label:name,docs:DOC_PERSONA.map(d=>({...d,done:false}))}};onUpdateChecklist(p.id,nl);}}
                   onRemoveGroup={(gid)=>{const nl={...p.checklist};delete nl[gid];onUpdateChecklist(p.id,nl);}}
                   onAddDoc={(gid,label)=>{const nl={...p.checklist};const id="custom_"+Date.now();nl[gid]={...nl[gid],docs:[...(nl[gid].docs||[]),{id,label,done:false}]};onUpdateChecklist(p.id,nl);}}
@@ -393,22 +445,49 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
               </div>
             )}
 
-            {/* Show pago cliente form when on facturacion step */}
-            {e.id==="fact_cliente"&&isAct&&(
+            {/* Show pago cliente info when on facturacion step (active or done) */}
+            {e.id==="fact_cliente"&&(isAct||isDone)&&(
               <div style={{marginTop:8,marginLeft:48,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
-                <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>💰 Información de pago del cliente</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Tipo</div>
-                    <select style={iS} value={p.cliPagoTipo||""} onChange={e=>onUpdatePagoCliente(p.id,{cliPagoTipo:e.target.value})}>
-                      <option value="">Selecciona</option><option value="total">Factura total</option><option value="anticipo">Factura anticipo</option><option value="efectivo">Efectivo (sin factura)</option>
-                    </select>
-                  </div>
-                  {p.cliPagoTipo&&p.cliPagoTipo!=="efectivo"&&<>
-                    <div><div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>N° Factura</div><input style={iS} value={p.cliFacturaNum||""} onChange={e=>onUpdatePagoCliente(p.id,{cliFacturaNum:e.target.value})}/></div>
-                    <div><div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Monto</div><input type="number" style={iS} value={p.cliFacturaMonto||""} onChange={e=>onUpdatePagoCliente(p.id,{cliFacturaMonto:parseFloat(e.target.value)||null})}/></div>
-                  </>}
+                <div style={{fontSize:13,fontWeight:700,marginBottom:12}}>💰 Información de pago del cliente</div>
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Tipo de pago</div>
+                  <select style={iS} value={p.cliPagoTipo||""} onChange={e=>onUpdatePagoCliente(p.id,{cliPagoTipo:e.target.value})}>
+                    <option value="">Selecciona</option>
+                    <option value="total">Factura total</option>
+                    <option value="anticipo">Factura anticipo</option>
+                    <option value="efectivo">Efectivo (sin factura)</option>
+                  </select>
                 </div>
+                {p.cliPagoTipo&&p.cliPagoTipo!=="efectivo"&&<>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Monto bruto</div>
+                      <input type="number" style={iS} value={p.cliFacturaBruto||""} onChange={ev=>{
+                        const bruto=parseFloat(ev.target.value)||0;
+                        const neto=bruto*1.16;
+                        onUpdatePagoCliente(p.id,{cliFacturaBruto:bruto||null,cliFacturaNeto:neto||null});
+                      }} placeholder="0.00"/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>IVA 16%</div>
+                      <input style={{...iS,background:"#f8f7f5"}} value={p.cliFacturaBruto?(p.cliFacturaBruto*0.16).toFixed(2):""} readOnly placeholder="0.00"/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Monto neto</div>
+                      <input style={{...iS,background:"#f8f7f5"}} value={p.cliFacturaNeto?p.cliFacturaNeto.toFixed(2):""} readOnly placeholder="0.00"/>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Concepto (editable)</div>
+                    <textarea style={{...iS,minHeight:60,resize:"vertical"}} value={p.cliFacturaConcepto||generarConcepto(p)} onChange={ev=>onUpdatePagoCliente(p.id,{cliFacturaConcepto:ev.target.value})}/>
+                    <button onClick={()=>onUpdatePagoCliente(p.id,{cliFacturaConcepto:generarConcepto(p)})} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,marginTop:4,padding:0}}>↻ Regenerar concepto</button>
+                  </div>
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Enviar factura a (nombre y/o correo)</div>
+                    <input style={iS} value={p.cliFacturaEnviarA||""} onChange={ev=>onUpdatePagoCliente(p.id,{cliFacturaEnviarA:ev.target.value})} placeholder="Ej: Juan Pérez, juan@empresa.com"/>
+                  </div>
+                  <Bt onClick={()=>enviarCorreoFactura(p)}>📧 Enviar solicitud a administración</Bt>
+                </>}
               </div>
             )}
 
@@ -720,7 +799,7 @@ function CalView({ps,inh,inhFor,onSelect}){
   // Map of date -> projects with deadline that day
   const events={};
   ps.forEach(p=>{
-    if(p.finished||p.archivado||!p.preDone)return;
+    if(p.finished||!p.preDone)return;
     const et=getEt(p.tipo);if(p.step>=et.length)return;
     const e=et[p.step];const d=p.etapas[e.id];
     if(e.plazo>0&&d?.start){
@@ -990,8 +1069,13 @@ function Dash({session,notarias,setNotarias,onLogout}){
     if("pagoMarcado"in upd)d.pago_marcado=upd.pagoMarcado;if("pagoDate"in upd)d.pago_date=upd.pagoDate;if("respNotaria"in upd)d.resp_notaria=upd.respNotaria;
     if("checklist"in upd)d.checklist=upd.checklist;if("preEtapas"in upd)d.pre_etapas=upd.preEtapas;if("preStep"in upd)d.pre_step=upd.preStep;if("preDone"in upd)d.pre_done=upd.preDone;
     if("cliPagoTipo"in upd)d.cli_pago_tipo=upd.cliPagoTipo;if("cliFacturaNum"in upd)d.cli_factura_num=upd.cliFacturaNum;if("cliFacturaMonto"in upd)d.cli_factura_monto=upd.cliFacturaMonto;
+    if("cliFacturaConcepto"in upd)d.cli_factura_concepto=upd.cliFacturaConcepto;
+    if("cliFacturaEnviarA"in upd)d.cli_factura_enviar_a=upd.cliFacturaEnviarA;
+    if("cliFacturaBruto"in upd)d.cli_factura_bruto=upd.cliFacturaBruto;
+    if("cliFacturaNeto"in upd)d.cli_factura_neto=upd.cliFacturaNeto;
     if("pagoEfectivo"in upd)d.pago_efectivo=upd.pagoEfectivo;if("numEscritura"in upd)d.num_escritura=upd.numEscritura;
     if("observaciones"in upd)d.observaciones=upd.observaciones;if("notas"in upd)d.notas=upd.notas;if("archivado"in upd)d.archivado=upd.archivado;
+    if("name"in upd)d.name=upd.name;if("cliente"in upd)d.cliente=upd.cliente;if("fechaActo"in upd)d.fecha_acto=upd.fechaActo;
     await db.updateProject(id,d);
   };
 
@@ -1094,7 +1178,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
     const step=isPast?2:0;
     const checklist=getChecklistTemplate(f.escenario);
     const preEtapas=mkPreEtapas();
-    const row=await db.createProject({name:f.nombre,cliente:f.cliente||"",tipo:f.tipo,escenario:f.escenario,step,created:f.fecha,etapas,fact_sent:false,pago_marcado:false,resp_notaria:"",finished:false,notaria_id:f.notariaId,checklist,pre_etapas:preEtapas,pre_step:0,pre_done:false,pago_efectivo:false,observaciones:{},notas:[]});
+    const row=await db.createProject({name:f.nombre,cliente:f.cliente||"",tipo:f.tipo,escenario:f.escenario,step,created:f.fecha,fecha_acto:f.fechaActo||null,etapas,fact_sent:false,pago_marcado:false,resp_notaria:"",finished:false,notaria_id:f.notariaId,checklist,pre_etapas:preEtapas,pre_step:0,pre_done:false,pago_efectivo:false,observaciones:{},notas:[]});
     if(row)setPs(prev=>[dbToApp(row[0]),...prev]);
     setShowForm(false);
   },[]);
@@ -1116,13 +1200,11 @@ function Dash({session,notarias,setNotarias,onLogout}){
   };
 
   // Notarías only see projects with preDone=true
-  const baseVisiblePs=role==="notaria"?ps.filter(p=>p.notariaId===nid&&p.preDone&&!p.archivado):filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
+  const baseVisiblePs=role==="notaria"?ps.filter(p=>p.notariaId===nid&&p.preDone):filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
 
   const filtered=useMemo(()=>{
     return baseVisiblePs.filter(p=>{
       if(search&&!p.name.toLowerCase().includes(search.toLowerCase())&&!(p.cliente||"").toLowerCase().includes(search.toLowerCase()))return false;
-      if(filtro==="archivados")return p.archivado;
-      if(p.archivado)return false;
       const et=getEt(p.tipo);
       if(filtro==="activos"&&p.finished)return false;
       if(filtro==="completados"&&!p.finished)return false;
@@ -1132,7 +1214,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
     });
   },[baseVisiblePs,filtro,role,inh,search,inhFor]);
 
-  const visiblePs=baseVisiblePs.filter(p=>!p.archivado);
+  const visiblePs=baseVisiblePs;
   const sel=ps.find(p=>p.id===selId);
   const act=visiblePs.filter(p=>!p.finished).length;
   const mt=visiblePs.filter(p=>isMyTurn(p)).length;
@@ -1216,7 +1298,6 @@ function Dash({session,notarias,setNotarias,onLogout}){
                     {getNotName(sel.notariaId)&&<Bg bg="#f5f3ff" color="#7c3aed">{getNotName(sel.notariaId)}</Bg>}
                     {sel.numEscritura&&<Bg bg="#eff6ff" color="#2563eb">📜 Esc. {sel.numEscritura}</Bg>}
                     {sel.finished&&<Bg bg="#f0fdf4" color="#16a34a">✓ Entregado {fmt(sel.finDate)}</Bg>}
-                    {sel.archivado&&<Bg bg="#f1f0ed" color="#8a857c">🗄 Archivado</Bg>}
                   </div>
                   {role==="notaria"&&!sel.finished&&(
                     <div style={{marginTop:11,display:"flex",alignItems:"center",gap:8}}>
@@ -1226,14 +1307,13 @@ function Dash({session,notarias,setNotarias,onLogout}){
                   )}
                 </div>
                 <div style={{display:"flex",gap:6}}>
-                  {role==="alonso"&&sel.finished&&<Bt v="g" onClick={()=>toggleArchive(sel.id)} style={{fontSize:11,padding:"5px 10px"}}>{sel.archivado?"📂 Desarchivar":"🗄 Archivar"}</Bt>}
                   {role==="alonso"&&<Bt v="d" onClick={()=>setCfm({msg:`¿Eliminar "${sel.name}"?`,action:()=>del(sel.id)})} style={{fontSize:11,padding:"5px 10px"}}>🗑</Bt>}
                   <button onClick={()=>setSelId(null)} style={{background:"#f1f0ed",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:15,color:"#8a857c",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                 </div>
               </div>
 
-              {/* Pre-pipeline (only alonso) */}
-              {role==="alonso"&&!sel.preDone&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs}/>}
+              {/* Pre-pipeline (only alonso) - always visible if not yet started or in progress; collapsible if done */}
+              {role==="alonso"&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs}/>}
 
               {/* Main pipeline */}
               {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo}/>}
@@ -1244,7 +1324,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
           )}
           <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
             <input style={{...iS,maxWidth:280}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Buscar por nombre o cliente..."/>
-            <select style={fS} value={filtro} onChange={e=>setFiltro(e.target.value)}><option value="todos">Todos</option><option value="activos">Activos</option><option value="mi_turno">Mi turno</option><option value="vencidos">Vencidos</option><option value="completados">Completados</option><option value="archivados">Archivados</option></select>
+            <select style={fS} value={filtro} onChange={e=>setFiltro(e.target.value)}><option value="todos">Todos</option><option value="activos">Activos</option><option value="mi_turno">Mi turno</option><option value="vencidos">Vencidos</option><option value="completados">Completados</option></select>
             <span style={{fontSize:13,color:"#8a857c"}}>{filtered.length} proyecto{filtered.length!==1?"s":""}</span>
           </div>
           <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",overflow:"hidden"}}>
@@ -1276,24 +1356,38 @@ function Dash({session,notarias,setNotarias,onLogout}){
 // NEW FORM
 // ═══════════════════════════════════════════════════════════════
 function NewForm({onCreate,onCancel,notarias}){
-  const[f,setF]=useState({nombre:"",cliente:"",tipo:"sin_registro",escenario:"acta_interno",fecha:td(),notariaId:notarias[0]?.id||""});
+  const NOMBRES_PRESET=["Acta de Asamblea","Constitución de Sociedad","Compraventa"];
+  const[f,setF]=useState({nombrePreset:"Acta de Asamblea",nombreCustom:"",cliente:"",tipo:"sin_registro",escenario:"acta_interno",fecha:td(),fechaActo:"",notariaId:notarias[0]?.id||""});
   const up=(k,v)=>setF(o=>({...o,[k]:v}));
+  const isOtro=f.nombrePreset==="Otro";
+  const nombre=isOtro?f.nombreCustom:f.nombrePreset;
+  const valid=nombre.trim()&&f.cliente.trim()&&f.fecha&&f.notariaId;
   return(
     <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:20}}>
       <div style={{fontSize:16,fontWeight:700,marginBottom:18}}>Nuevo proyecto</div>
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:12}}>
-        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Nombre del proyecto</div><input style={iS} value={f.nombre} onChange={e=>up("nombre",e.target.value)} placeholder="Ej: Constitución XYZ SA de CV"/></div>
-        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Cliente (opcional)</div><input style={iS} value={f.cliente} onChange={e=>up("cliente",e.target.value)} placeholder="Nombre del cliente"/></div>
+      <div style={{display:"grid",gridTemplateColumns:isOtro?"1fr 1fr 1fr":"1fr 1fr",gap:12,marginBottom:12}}>
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Tipo de proyecto</div>
+          <select style={iS} value={f.nombrePreset} onChange={e=>up("nombrePreset",e.target.value)}>
+            {NOMBRES_PRESET.map(n=><option key={n} value={n}>{n}</option>)}
+            <option value="Otro">Otro...</option>
+          </select>
+        </div>
+        {isOtro&&<div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Especificar</div><input style={iS} value={f.nombreCustom} onChange={e=>up("nombreCustom",e.target.value)} placeholder="Nombre del proyecto"/></div>}
+        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Cliente</div><input style={iS} value={f.cliente} onChange={e=>up("cliente",e.target.value)} placeholder="Nombre del cliente"/></div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Tipo de registro</div><select style={iS} value={f.tipo} onChange={e=>up("tipo",e.target.value)}>{TIPOS.map(t=><option key={t} value={t}>{TIPO_L[t]}</option>)}</select></div>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Notaría</div><select style={iS} value={f.notariaId} onChange={e=>up("notariaId",e.target.value)}>{notarias.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}{!notarias.length&&<option value="">Sin notarías registradas</option>}</select></div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Escenario de documentos</div><select style={iS} value={f.escenario} onChange={e=>up("escenario",e.target.value)}>{Object.entries(ESCENARIOS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
-        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Fecha de inicio</div><input type="date" style={iS} value={f.fecha} onChange={e=>up("fecha",e.target.value)}/><div style={{fontSize:11,color:"#8a857c",marginTop:4}}>Si es pasada, proyección y envío se completan automáticamente</div></div>
+        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Fecha del acto (opcional)</div><input type="date" style={iS} value={f.fechaActo} onChange={e=>up("fechaActo",e.target.value)}/><div style={{fontSize:11,color:"#8a857c",marginTop:4}}>Fecha de la asamblea, compraventa o constitución</div></div>
       </div>
-      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Bt v="g" onClick={onCancel}>Cancelar</Bt><Bt onClick={()=>{if(f.nombre.trim()&&f.fecha&&f.notariaId)onCreate(f);}} disabled={!f.nombre.trim()||!f.fecha||!f.notariaId}>Crear proyecto</Bt></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12,marginBottom:18}}>
+        <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Fecha de inicio del proyecto</div><input type="date" style={iS} value={f.fecha} onChange={e=>up("fecha",e.target.value)}/><div style={{fontSize:11,color:"#8a857c",marginTop:4}}>Si es pasada, proyección y envío se completan automáticamente</div></div>
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Bt v="g" onClick={onCancel}>Cancelar</Bt><Bt onClick={()=>{if(valid)onCreate({...f,nombre});}} disabled={!valid}>Crear proyecto</Bt></div>
     </div>
   );
 }
