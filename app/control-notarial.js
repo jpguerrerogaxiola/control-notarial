@@ -641,7 +641,7 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
 // ═══════════════════════════════════════════════════════════════
 // PIPELINE NORMAL (con notaría)
 // ═══════════════════════════════════════════════════════════════
-function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo}){
+function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo,onAddFile,onRemoveFile,onNotifyNotaria,onToggleCSF}){
   const etapas=getEt(p.tipo),envDone=p.etapas.envio?.done;
   const [editingDate,setEditingDate]=useState(null);
   const [dateVal,setDateVal]=useState("");
@@ -665,7 +665,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
         const d=p.etapas[e.id],info=getSt(p,i,inh);
         const isAct=i===p.step&&!p.finished;
         const canAct=isAct&&(role==="alonso"||e.owner==="notaria");
-        const isFact=e.id==="facturacion",isPago=e.id==="pago",isFirma=e.id==="firma";
+        const isFact=e.id==="facturacion",isPago=e.id==="pago",isFirma=e.id==="firma",isEnvio=e.id==="envio";
         const obs=p.observaciones?.[e.id];
         const hasObs=obs?.incompleta;
 
@@ -826,6 +826,13 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                   <Bt v="g" onClick={()=>setShowObsFor(null)} style={{fontSize:11,padding:"5px 10px"}}>Cancelar</Bt>
                   <Bt v="w" onClick={()=>{if(obsText.trim()){onSetObs(p.id,e.id,obsText);setShowObsFor(null);setObsText("");}}} style={{fontSize:11,padding:"5px 10px"}}>Marcar incompleta</Bt>
                 </div>
+              </div>
+            )}
+
+            {/* Expediente digital inside envio step */}
+            {isEnvio&&(
+              <div style={{marginLeft:48,marginRight:4,marginTop:6}}>
+                <ExpedienteView p={p} role={role} onAddFile={onAddFile} onRemoveFile={onRemoveFile} onNotifyNotaria={onNotifyNotaria} onToggleCSF={onToggleCSF}/>
               </div>
             )}
 
@@ -2150,10 +2157,9 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               {role==="alonso"&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs} onMarkFacturaSolicitada={markFacturaSolicitada} onMarkClientePagado={markClientePagado} onUndoClientePagado={undoClientePagado}/>}
 
               {/* Main pipeline */}
-              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo}/>}
+              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria} onToggleCSF={toggleCSF}/>}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
-              <ExpedienteView p={sel} role={role} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria} onToggleCSF={toggleCSF}/>
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
             </div>
           )}
