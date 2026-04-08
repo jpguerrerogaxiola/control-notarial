@@ -35,6 +35,31 @@ const db = {
   updateSystemUser: (id, d) => sb("system_users", "PATCH", d, `?id=eq.${id}`),
 };
 
+// Storage helpers for Supabase Storage
+async function uploadFile(projectId, file){
+  const path = `${projectId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
+  const url = `${SB_URL}/storage/v1/object/expediente/${path}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if(!res.ok){ console.error("Upload failed:", await res.text()); return null; }
+  // Return the public URL
+  return `${SB_URL}/storage/v1/object/public/expediente/${path}`;
+}
+async function deleteFile(url){
+  // Extract path from URL
+  const m = url.match(/expediente\/(.+)$/);
+  if(!m) return false;
+  const path = m[1];
+  const res = await fetch(`${SB_URL}/storage/v1/object/expediente/${path}`, {
+    method: "DELETE",
+    headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}` },
+  });
+  return res.ok;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // CALENDAR UTILS
 // ═══════════════════════════════════════════════════════════════
@@ -49,6 +74,32 @@ const isWE = d => d.getDay()===0||d.getDay()===6;
 const iSet = inh => { const s=new Set(); inh.forEach(i=>s.add(i.fecha)); return s; };
 function addBD(ds,n,inh){ if(!ds||n<=0)return null; const s=iSet(inh); let d=new Date(ds+"T12:00:00"),a=0; while(a<n){d.setDate(d.getDate()+1);if(!isWE(d)&&!s.has(d.toISOString().split("T")[0]))a++;} return d.toISOString().split("T")[0]; }
 function bdBtw(a,b,inh){ const s=iSet(inh); let x=new Date(a+"T12:00:00"),y=new Date(b+"T12:00:00"),neg=false; if(y<x){[x,y]=[y,x];neg=true;} let c=0,cur=new Date(x); while(cur<y){cur.setDate(cur.getDate()+1);if(!isWE(cur)&&!s.has(cur.toISOString().split("T")[0]))c++;} return neg?-c:c; }
+
+// Calculate delay for a completed step: returns number of business days late (negative = early, 0 = on time, positive = late)
+function calcRetraso(p, etapaId, inh){
+  const et=getEt(p.tipo);
+  const idx=et.findIndex(e=>e.id===etapaId);
+  if(idx<0)return 0;
+  const e=et[idx];
+  const d=p.etapas[etapaId];
+  if(!d?.done||!d?.start||!d?.end||e.plazo<=0)return 0;
+  const venc=d?.vencimiento||addBD(d.start,e.plazo,inh);
+  if(!venc)return 0;
+  return bdBtw(venc,d.end,inh);
+}
+
+// Total accumulated delay for a project
+function calcRetrasoTotal(p,inh){
+  const et=getEt(p.tipo);
+  let total=0;
+  et.forEach(e=>{
+    if(e.plazo>0){
+      const r=calcRetraso(p,e.id,inh);
+      if(r>0)total+=r;
+    }
+  });
+  return total;
+}
 const td = () => new Date().toISOString().split("T")[0];
 function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return `${parseInt(p[2])} ${m[parseInt(p[1])-1]} ${p[0]}`; }
 function fmtLong(d){ if(!d)return""; const p=d.split("-"),m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]; return `${parseInt(p[2])} de ${m[parseInt(p[1])-1]} de ${p[0]}`; }
@@ -163,7 +214,7 @@ function getSt(p,i,inh){
   if(d?.done)return{s:"done",c:"#16a34a",l:"Completada"};
   if(i>p.step)return{s:"wait",c:"#94a3b8",l:"Pendiente"};
   if(i<p.step)return{s:"done",c:"#16a34a",l:"Completada"};
-  if(e.plazo>0&&d?.start){ const v=addBD(d.start,e.plazo,inh),h=td(); if(h>v)return{s:"over",c:"#dc2626",l:"Vencida",v}; if(bdBtw(h,v,inh)<=1)return{s:"soon",c:"#d97706",l:"Por vencer",v}; return{s:"active",c:"#2563eb",l:"En curso",v}; }
+  if(e.plazo>0&&d?.start){ const v=d?.vencimiento||addBD(d.start,e.plazo,inh),h=td(); if(h>v)return{s:"over",c:"#dc2626",l:"Vencida",v}; if(bdBtw(h,v,inh)<=1)return{s:"soon",c:"#d97706",l:"Por vencer",v}; return{s:"active",c:"#2563eb",l:"En curso",v}; }
   return{s:"active",c:"#2563eb",l:"Acción requerida"};
 }
 
@@ -200,7 +251,7 @@ function dbToApp(r){
     facturaSolicitada:r.factura_solicitada||false,facturaSolicitadaAt:r.factura_solicitada_at,
     facturaEmitidaNum:r.factura_emitida_num||"",facturaEmitidaAt:r.factura_emitida_at,
     clientePagado:r.cliente_pagado||false,clientePagadoAt:r.cliente_pagado_at,clientePagadoPor:r.cliente_pagado_por||"",
-    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[]};
+    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[],expediente:r.expediente||[]};
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -232,13 +283,15 @@ function generarConcepto(p){
   return base.trim();
 }
 
-function enviarCorreoFactura(p,onSent){
+function enviarCorreoFactura(p,notariaObj,onSent){
   const to="administracion@alonsoycia.com.mx";
   const cc="j.rojas@alonsoycia.com.mx,juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx";
   const subject=`Solicitud de CFDI — ${p.name} ${p.cliente||""}`;
   const bruto=p.cliFacturaBruto?`$${p.cliFacturaBruto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
   const neto=p.cliFacturaNeto?`$${p.cliFacturaNeto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
   const concepto=p.cliFacturaConcepto||generarConcepto(p);
+  // Find CSF sociedad file if exists
+  const csf=(p.expediente||[]).find(f=>f.es_csf_sociedad);
   const body=`Elo, buen día, te pido por favor nos ayudes a emitir un CFDI con las siguientes características:
 
 Cliente: ${p.cliente||"—"}
@@ -246,6 +299,8 @@ Concepto: ${concepto}
 Monto bruto: ${bruto}
 Monto neto (con IVA): ${neto}
 Enviar a: ${p.cliFacturaEnviarA||"—"}
+${csf?`
+Constancia de Situación Fiscal del cliente: ${csf.url}`:""}
 
 Muchas gracias.
 
@@ -253,6 +308,32 @@ Saludos.`;
   const url=`mailto:${encodeURIComponent(to)}?cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   window.location.href=url;
   if(onSent)onSent();
+}
+
+function enviarCorreoNotaria(p,notariaObj){
+  if(!notariaObj||!notariaObj.emails){alert("La notaría no tiene correos configurados. Ve a Administrar notarías y agrégalos.");return;}
+  const to=notariaObj.emails;
+  const cc="juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx,j.rojas@alonsoycia.com.mx";
+  const subject=`Nuevo proyecto cargado — ${p.name} ${p.cliente||""}`;
+  const expedienteList=(p.expediente||[]).map(f=>`• ${f.nombre}: ${f.url}`).join("\n");
+  const body=`Buen día,
+
+Les informamos que hemos cargado un nuevo proyecto en la plataforma de Control Notarial con los siguientes datos:
+
+Proyecto: ${p.name}
+Cliente: ${p.cliente||"—"}
+Tipo: ${TIPO_L[p.tipo]||p.tipo}
+${p.fechaActo?`Fecha del acto: ${fmtLong(p.fechaActo)}`:""}
+
+Documentos disponibles en el expediente digital:
+${expedienteList||"(ninguno aún)"}
+
+Pueden descargarlos directamente desde su panel de Control Notarial, o desde los enlaces anteriores.
+
+Saludos,
+Alonso y Cía`;
+  const url=`mailto:${encodeURIComponent(to)}?cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href=url;
 }
 
 function enviarCorreoCobranza(p){
@@ -515,7 +596,7 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
                   </div>
                   <Bt onClick={()=>{
                     if(!p.cliFacturaBruto||!p.cliFacturaEnviarA){alert("Faltan datos: monto bruto y destinatario son obligatorios");return;}
-                    enviarCorreoFactura(p,()=>onMarkFacturaSolicitada(p.id));
+                    enviarCorreoFactura(p,null,()=>onMarkFacturaSolicitada(p.id));
                   }}>📧 Enviar solicitud a administración</Bt>
                   {p.facturaSolicitada&&<Bg bg="#f0fdf4" color="#16a34a" style={{marginLeft:8}}>✓ Solicitada {p.facturaSolicitadaAt?fmt(p.facturaSolicitadaAt.split("T")[0]):""}</Bg>}
                 </>}
@@ -630,16 +711,61 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                   {isPago&&pagoVenc&&!p.pagoMarcado&&<span style={{color:dI.c,fontWeight:700}}>Vence: {fmt(pagoVenc)}</span>}
                   {isPago&&p.pagoMarcado&&<span style={{color:"#16a34a",fontWeight:600}}>✓ Pagado: {fmt(p.pagoDate)}</span>}
                   {!isPago&&d?.start&&<span>Inicio: {fmt(d.start)}</span>}
-                  {!isPago&&d?.end&&!isEditing&&<span style={{color:"#16a34a",fontWeight:600}}>✓ {fmt(d.end)}</span>}
-                  {!isPago&&info.v&&!d?.done&&<span style={{color:info.c,fontWeight:700}}>Vence: {fmt(info.v)}</span>}
-                  {/* Edit date - alonso, all completed steps */}
-                  {!isPago&&!isFact&&d?.done&&role==="alonso"&&!isEditing&&(
-                    <button onClick={()=>{setEditingDate(e.id);setDateVal(d.end||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,padding:0}}>✏️ editar</button>
+                  {/* Fecha de vencimiento */}
+                  {!isPago&&!isFact&&e.plazo>0&&d?.start&&(()=>{
+                    const venc=d.vencimiento||addBD(d.start,e.plazo,inh);
+                    return <span style={{color:d?.done?"#8a857c":info.c,fontWeight:d?.done?500:700}}>Vence: {fmt(venc)}</span>;
+                  })()}
+                  {/* Fecha de cumplimiento */}
+                  {!isPago&&d?.end&&editingDate!==e.id&&<span style={{color:"#16a34a",fontWeight:600}}>✓ Cumplida: {fmt(d.end)}</span>}
+                  {/* Indicador de retraso */}
+                  {!isPago&&!isFact&&d?.done&&e.plazo>0&&(()=>{
+                    const r=calcRetraso(p,e.id,inh);
+                    if(r>0)return <span style={{color:"#dc2626",fontWeight:700}}>⚠ {r} día{r>1?"s":""} de retraso</span>;
+                    if(r===0)return <span style={{color:"#16a34a",fontWeight:600}}>✓ A tiempo</span>;
+                    return <span style={{color:"#16a34a",fontWeight:600}}>✓ {Math.abs(r)} día{Math.abs(r)>1?"s":""} antes</span>;
+                  })()}
+                  {/* Edit fecha cumplimiento - alonso, completed steps */}
+                  {!isPago&&!isFact&&d?.done&&role==="alonso"&&editingDate!==e.id&&(
+                    <button onClick={()=>{setEditingDate(e.id);setDateVal(d.end||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,padding:0}}>✏️ editar cumplimiento</button>
+                  )}
+                  {/* Edit vencimiento - alonso, pending/active */}
+                  {!isPago&&!isFact&&!d?.done&&isAct&&e.plazo>0&&role==="alonso"&&editingDate!==`venc_${e.id}`&&(
+                    <button onClick={()=>{setEditingDate(`venc_${e.id}`);setDateVal(d?.vencimiento||addBD(d?.start,e.plazo,inh)||"");}} style={{background:"none",border:"none",color:"#d97706",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,padding:0}}>✏️ editar vencimiento</button>
                   )}
                   {isEditing&&role==="alonso"&&(
                     <span style={{display:"inline-flex",gap:4,alignItems:"center"}}>
                       <input type="date" value={dateVal} onChange={ev=>setDateVal(ev.target.value)} style={{padding:"2px 6px",borderRadius:6,border:"1px solid #e8e5df",fontSize:11}}/>
                       <button onClick={()=>{if(dateVal){onEditDate(p.id,e.id,dateVal);setEditingDate(null);}}} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✓</button>
+                      <button onClick={()=>setEditingDate(null)} style={{background:"#f1f0ed",color:"#8a857c",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
+                    </span>
+                  )}
+                  {editingDate===`venc_${e.id}`&&role==="alonso"&&(
+                    <span style={{display:"inline-flex",gap:4,alignItems:"center"}}>
+                      <input type="date" value={dateVal} onChange={ev=>setDateVal(ev.target.value)} style={{padding:"2px 6px",borderRadius:6,border:"1px solid #e8e5df",fontSize:11}}/>
+                      <button onClick={()=>{if(dateVal){onEditDate(p.id,`venc_${e.id}`,dateVal);setEditingDate(null);}}} style={{background:"#d97706",color:"#fff",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✓</button>
+                      <button onClick={()=>setEditingDate(null)} style={{background:"#f1f0ed",color:"#8a857c",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
+                    </span>
+                  )}
+                  {/* Edit factura date */}
+                  {isFact&&p.factSent&&role==="alonso"&&editingDate!=="facturacion"&&(
+                    <button onClick={()=>{setEditingDate("facturacion");setDateVal(p.factDate||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,padding:0}}>✏️ editar fecha factura</button>
+                  )}
+                  {editingDate==="facturacion"&&role==="alonso"&&(
+                    <span style={{display:"inline-flex",gap:4,alignItems:"center"}}>
+                      <input type="date" value={dateVal} onChange={ev=>setDateVal(ev.target.value)} style={{padding:"2px 6px",borderRadius:6,border:"1px solid #e8e5df",fontSize:11}}/>
+                      <button onClick={()=>{if(dateVal){onEditDate(p.id,"facturacion",dateVal);setEditingDate(null);}}} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✓</button>
+                      <button onClick={()=>setEditingDate(null)} style={{background:"#f1f0ed",color:"#8a857c",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
+                    </span>
+                  )}
+                  {/* Edit pago date */}
+                  {isPago&&p.pagoMarcado&&role==="alonso"&&editingDate!=="pago"&&(
+                    <button onClick={()=>{setEditingDate("pago");setDateVal(p.pagoDate||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,padding:0}}>✏️ editar fecha pago</button>
+                  )}
+                  {editingDate==="pago"&&role==="alonso"&&(
+                    <span style={{display:"inline-flex",gap:4,alignItems:"center"}}>
+                      <input type="date" value={dateVal} onChange={ev=>setDateVal(ev.target.value)} style={{padding:"2px 6px",borderRadius:6,border:"1px solid #e8e5df",fontSize:11}}/>
+                      <button onClick={()=>{if(dateVal){onEditDate(p.id,"pago",dateVal);setEditingDate(null);}}} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✓</button>
                       <button onClick={()=>setEditingDate(null)} style={{background:"#f1f0ed",color:"#8a857c",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
                     </span>
                   )}
@@ -685,6 +811,8 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                 {isPago&&p.factSent&&!p.pagoMarcado&&role==="notaria"&&<Bg bg="#fffbeb" color="#d97706">⏳ Esperando pago</Bg>}
                 {isPago&&p.pagoMarcado&&<Bg bg="#f0fdf4" color="#16a34a">✓ Pagado {fmt(p.pagoDate)}</Bg>}
                 {canAct&&!isFact&&!isPago&&<Bt v={e.owner==="notaria"?"n":"p"} onClick={()=>onDone(p.id,e.id)}>Completar ✓</Bt>}
+                {/* Allow advancing entregables when incomplete */}
+                {isAct&&e.id==="entregables"&&hasObs&&role==="alonso"&&<Bt v="w" onClick={()=>onDone(p.id,e.id)} style={{fontSize:11,padding:"6px 12px"}}>→ Avanzar aunque esté incompleta</Bt>}
                 {isAct&&!canAct&&!isFact&&!isPago&&role==="notaria"&&<Bg bg="#eff6ff" color="#2563eb">Esperando Alonso</Bg>}
               </div>
             </div>
@@ -705,6 +833,128 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EXPEDIENTE DIGITAL
+// ═══════════════════════════════════════════════════════════════
+function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria}){
+  const [uploading, setUploading] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [isCSF, setIsCSF] = useState(false);
+  const fileInputRef = useRef(null);
+  const canEdit = role === "alonso";
+  const canView = role === "alonso" || role === "notaria";
+  if(!canView)return null;
+  const expediente = p.expediente || [];
+
+  const handleFile = async (file) => {
+    if(!file)return;
+    setUploading(true);
+    const url = await uploadFile(p.id, file);
+    if(url){
+      const entry = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+        nombre: fileName || file.name,
+        url,
+        tipo: file.type,
+        size: file.size,
+        uploaded_at: new Date().toISOString(),
+        uploaded_by: role,
+        es_csf_sociedad: isCSF,
+      };
+      await onAddFile(p.id, entry);
+      setFileName("");
+      setIsCSF(false);
+      if(fileInputRef.current) fileInputRef.current.value = "";
+    } else {
+      alert("Error al subir archivo. Revisa que el bucket 'expediente' esté configurado en Supabase Storage.");
+    }
+    setUploading(false);
+  };
+
+  const downloadAll = async () => {
+    if(!expediente.length) return;
+    // Load JSZip from CDN dynamically
+    if(!window.JSZip){
+      await new Promise((resolve,reject)=>{
+        const s=document.createElement("script");
+        s.src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+        s.onload=resolve;s.onerror=reject;
+        document.head.appendChild(s);
+      });
+    }
+    const zip = new window.JSZip();
+    for(const f of expediente){
+      try{
+        const res = await fetch(f.url);
+        const blob = await res.blob();
+        zip.file(f.nombre, blob);
+      }catch(e){console.error("Error downloading",f.nombre,e);}
+    }
+    const content = await zip.generateAsync({type:"blob"});
+    const url = URL.createObjectURL(content);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Expediente_${p.name}_${p.cliente||""}.zip`.replace(/[^a-zA-Z0-9._-]/g,"_");
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const fmtSize = (b) => b<1024?`${b}B`:b<1024*1024?`${(b/1024).toFixed(1)}KB`:`${(b/1024/1024).toFixed(1)}MB`;
+
+  return(
+    <div style={{marginTop:18,padding:18,borderRadius:14,background:"#fff",border:"1px solid #e8e5df"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700}}>📎 Expediente digital ({expediente.length})</div>
+          <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>{role==="alonso"?"Sube los documentos del expediente. La notaría los podrá descargar.":"Documentos cargados por Alonso y Cía"}</div>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {expediente.length>0&&<Bt v="g" onClick={downloadAll} style={{fontSize:11,padding:"6px 12px"}}>📥 Descargar todos (ZIP)</Bt>}
+          {role==="alonso"&&expediente.length>0&&<Bt onClick={()=>onNotifyNotaria(p)} style={{fontSize:11,padding:"6px 12px"}}>📧 Avisar a notaría</Bt>}
+        </div>
+      </div>
+
+      {canEdit&&(
+        <div style={{padding:12,borderRadius:10,background:"#f8f7f5",marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Subir nuevo archivo</div>
+          <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap",marginBottom:8}}>
+            <div style={{flex:1,minWidth:200}}>
+              <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Nombre del archivo (opcional)</div>
+              <input style={iS} value={fileName} onChange={e=>setFileName(e.target.value)} placeholder="Ej: CSF Sociedad.pdf"/>
+            </div>
+            <label style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+              <input type="checkbox" checked={isCSF} onChange={e=>setIsCSF(e.target.checked)} style={{width:16,height:16}}/>
+              Es CSF de sociedad
+            </label>
+          </div>
+          <input ref={fileInputRef} type="file" onChange={e=>handleFile(e.target.files?.[0])} disabled={uploading} style={{fontSize:12,fontFamily:"inherit"}}/>
+          {uploading&&<div style={{fontSize:12,color:"#2563eb",marginTop:6}}>Subiendo...</div>}
+        </div>
+      )}
+
+      {!expediente.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin documentos cargados aún</div>:
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {expediente.map((f)=>(
+            <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#f8f7f5"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {f.es_csf_sociedad&&<span style={{color:"#7c3aed",marginRight:6}}>⭐</span>}
+                  {f.nombre}
+                </div>
+                <div style={{fontSize:11,color:"#8a857c"}}>{fmtSize(f.size)} — Subido por {f.uploaded_by} el {fmt(f.uploaded_at.split("T")[0])}</div>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <a href={f.url} download={f.nombre} target="_blank" rel="noopener noreferrer" style={{padding:"6px 12px",borderRadius:8,background:"#2563eb",color:"#fff",fontSize:11,fontWeight:600,textDecoration:"none",fontFamily:"inherit"}}>⬇ Descargar</a>
+                {canEdit&&<button onClick={()=>onRemoveFile(p.id,f.id,f.url)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>✕</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      }
     </div>
   );
 }
@@ -1104,7 +1354,7 @@ function Cal({inh,addInh,delInh,notarias,role,nid}){
 // ═══════════════════════════════════════════════════════════════
 function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSystemUser}){
   const[show,setShow]=useState(false);
-  const[f,setF]=useState({name:"",username:"",password:""});
+  const[f,setF]=useState({name:"",username:"",password:"",emails:""});
   const[editing,setEditing]=useState(null);
   const[editingSys,setEditingSys]=useState(null);
   const[sysPass,setSysPass]=useState("");
@@ -1113,7 +1363,7 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSyste
     if(!f.name.trim()||!f.username.trim()||!f.password.trim())return;
     if(editing){await onUpdate(editing,f);setEditing(null);}
     else await onCreate(f);
-    setF({name:"",username:"",password:""});setShow(false);
+    setF({name:"",username:"",password:"",emails:""});setShow(false);
   };
   const saveSysPass=async(id)=>{
     if(!sysPass.trim())return;
@@ -1130,10 +1380,15 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSyste
         {(show||editing)&&(
           <div style={{padding:18,borderRadius:12,background:"#f8f7f5",marginBottom:18}}>
             <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>{editing?"Editar notaría":"Nueva notaría"}</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
               <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Nombre</div><input style={iS} value={f.name} onChange={e=>up("name",e.target.value)} placeholder="Notaría XX de..."/></div>
               <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Usuario</div><input style={iS} value={f.username} onChange={e=>up("username",e.target.value)} placeholder="notariaXX"/></div>
               <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Contraseña</div><input style={iS} value={f.password} onChange={e=>up("password",e.target.value)} placeholder="Contraseña"/></div>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Correos de aviso (separados por coma)</div>
+              <input style={iS} value={f.emails||""} onChange={e=>up("emails",e.target.value)} placeholder="correo1@example.com, correo2@example.com"/>
+              <div style={{fontSize:11,color:"#8a857c",marginTop:3}}>A estos correos se enviará la notificación cuando cargues un proyecto nuevo</div>
             </div>
             <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
               <Bt v="g" onClick={()=>{setShow(false);setEditing(null);}}>Cancelar</Bt>
@@ -1145,9 +1400,13 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSyste
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {notarias.map(n=>(
               <div key={n.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",borderRadius:10,background:"#f8f7f5"}}>
-                <div><div style={{fontSize:14,fontWeight:600}}>{n.name}</div><div style={{fontSize:12,color:"#8a857c"}}>Usuario: {n.username}</div></div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:600}}>{n.name}</div>
+                  <div style={{fontSize:12,color:"#8a857c"}}>Usuario: {n.username}</div>
+                  {n.emails&&<div style={{fontSize:11,color:"#8a857c",marginTop:2}}>📧 {n.emails}</div>}
+                </div>
                 <div style={{display:"flex",gap:6}}>
-                  <button onClick={()=>{setEditing(n.id);setF({name:n.name,username:n.username,password:n.password});setShow(false);}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>✏️ Editar</button>
+                  <button onClick={()=>{setEditing(n.id);setF({name:n.name,username:n.username,password:n.password,emails:n.emails||""});setShow(false);}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>✏️ Editar</button>
                   <button onClick={()=>onDelete(n.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>🗑 Eliminar</button>
                 </div>
               </div>
@@ -1444,6 +1703,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("clientePagadoPor"in upd)d.cliente_pagado_por=upd.clientePagadoPor;
     if("notasCobranza"in upd)d.notas_cobranza=upd.notasCobranza;
     if("facturaLog"in upd)d.factura_log=upd.facturaLog;
+    if("expediente"in upd)d.expediente=upd.expediente;
     await db.updateProject(id,d);
   };
 
@@ -1479,9 +1739,20 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const advance=useCallback(async(pid,eid)=>{setPs(prev=>prev.map(p=>{
     if(p.id!==pid)return p;
     const et=getEt(p.tipo),h=td(),ne={...p.etapas};
+    // Special case: if advancing entregables and it has incompleta obs, keep it incompleta but move forward
+    const hasIncompleta=p.observaciones?.[eid]?.incompleta;
+    if(eid==="entregables"&&hasIncompleta){
+      // Don't mark as done, but still advance step
+      let nx=p.step+1;
+      if(nx<et.length&&et[nx].id==="facturacion"&&p.pagoEfectivo){nx++;}
+      if(nx<et.length&&et[nx].id==="facturacion"&&p.factSent){ne.facturacion={...ne.facturacion,done:true,start:p.factDate,end:p.factDate};nx++;}
+      if(nx<et.length&&et[nx].id==="pago"&&p.pagoMarcado){ne.pago={...ne.pago,done:true,start:p.pagoDate,end:p.pagoDate};nx++;}
+      if(nx<et.length)ne[et[nx].id]={...ne[et[nx].id],start:h};
+      const r={...p,etapas:ne,step:nx};
+      save(pid,r);return r;
+    }
     ne[eid]={...ne[eid],done:true,end:h};
     let nx=p.step+1;
-    // Skip facturacion if pago_efectivo
     if(nx<et.length&&et[nx].id==="facturacion"&&p.pagoEfectivo){nx++;}
     if(nx<et.length&&et[nx].id==="facturacion"&&p.factSent){ne.facturacion={...ne.facturacion,done:true,start:p.factDate,end:p.factDate};nx++;}
     if(nx<et.length&&et[nx].id==="pago"&&p.pagoMarcado){ne.pago={...ne.pago,done:true,start:p.pagoDate,end:p.pagoDate};nx++;}
@@ -1523,7 +1794,21 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
         if(idx>=0&&idx+1<PRE_ETAPAS.length&&ne[PRE_ETAPAS[idx+1].id])ne[PRE_ETAPAS[idx+1].id]={...ne[PRE_ETAPAS[idx+1].id],start:newDate};
         save(pid,{preEtapas:ne});return{...p,preEtapas:ne};
       }
-      // Main pipeline edit
+      // Edit vencimiento (editable deadline)
+      if(eid.startsWith("venc_")){
+        const realEid=eid.replace("venc_","");
+        const ne={...p.etapas};ne[realEid]={...ne[realEid],vencimiento:newDate};
+        save(pid,{etapas:ne});return{...p,etapas:ne};
+      }
+      // Edit factura date
+      if(eid==="facturacion"){
+        save(pid,{factDate:newDate});return{...p,factDate:newDate};
+      }
+      // Edit pago date
+      if(eid==="pago"){
+        save(pid,{pagoDate:newDate});return{...p,pagoDate:newDate};
+      }
+      // Main pipeline edit (cumplimiento)
       const ne={...p.etapas};ne[eid]={...ne[eid],end:newDate};
       const et=getEt(p.tipo);const idx=et.findIndex(e=>e.id===eid);
       if(idx>=0&&idx+1<et.length&&ne[et[idx+1].id])ne[et[idx+1].id]={...ne[et[idx+1].id],start:newDate};
@@ -1539,6 +1824,30 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const togglePagoEfectivo=useCallback(async(pid)=>{setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const v=!p.pagoEfectivo;save(pid,{pagoEfectivo:v});return{...p,pagoEfectivo:v};}));},[]);
   const addNota=useCallback(async(pid,nota)=>{setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const n=[...(p.notas||[]),nota];save(pid,{notas:n});return{...p,notas:n};}));},[]);
   const addNotaCobranza=useCallback(async(pid,nota)=>{setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const n=[...(p.notasCobranza||[]),nota];save(pid,{notasCobranza:n});return{...p,notasCobranza:n};}));},[]);
+
+  const addFile=useCallback(async(pid,fileEntry)=>{
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      const exp=[...(p.expediente||[]),fileEntry];
+      save(pid,{expediente:exp});
+      return{...p,expediente:exp};
+    }));
+  },[]);
+
+  const removeFile=useCallback(async(pid,fileId,fileUrl)=>{
+    try{await deleteFile(fileUrl);}catch(e){}
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      const exp=(p.expediente||[]).filter(f=>f.id!==fileId);
+      save(pid,{expediente:exp});
+      return{...p,expediente:exp};
+    }));
+  },[]);
+
+  const notifyNotaria=useCallback((p)=>{
+    const notariaObj=notarias.find(n=>n.id===p.notariaId);
+    enviarCorreoNotaria(p,notariaObj);
+  },[notarias]);
 
   // Mark factura solicitada (when user clicks email button)
   const markFacturaSolicitada=useCallback(async(pid)=>{
@@ -1757,6 +2066,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
                     {sel.numEscritura&&<Bg bg="#eff6ff" color="#2563eb">📜 Esc. {sel.numEscritura}</Bg>}
                     {sel.cliPagoTipo==="efectivo"&&<Bg bg="#fef3c7" color="#92400e">💵 Efectivo cliente</Bg>}
                     {sel.cliPagoTipo&&sel.cliPagoTipo!=="efectivo"&&(sel.clientePagado?<Bg bg="#f0fdf4" color="#16a34a">💰 Cliente pagado</Bg>:sel.facturaSolicitada?<Bg bg="#fffbeb" color="#d97706">⏳ Cliente pendiente</Bg>:null)}
+                    {(()=>{const rt=calcRetrasoTotal(sel,inhFor(sel.notariaId));if(rt>0)return <Bg bg="#fef2f2" color="#dc2626">⚠ {rt} día{rt>1?"s":""} de retraso acumulado</Bg>;return null;})()}
                     {sel.finished&&<Bg bg="#f0fdf4" color="#16a34a">✓ Entregado {fmt(sel.finDate)}</Bg>}
                   </div>
                   {role==="notaria"&&!sel.finished&&(
@@ -1779,6 +2089,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo}/>}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
+              <ExpedienteView p={sel} role={role} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria}/>
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
             </div>
           )}
