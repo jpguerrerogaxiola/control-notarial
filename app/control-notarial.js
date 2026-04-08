@@ -31,6 +31,8 @@ const db = {
   createNotaria: (n) => sb("notarias", "POST", n),
   updateNotaria: (id, d) => sb("notarias", "PATCH", d, `?id=eq.${id}`),
   deleteNotaria: (id) => sb("notarias", "DELETE", null, `?id=eq.${id}`),
+  getSystemUsers: () => sb("system_users", "GET", null, "?order=created_at.asc"),
+  updateSystemUser: (id, d) => sb("system_users", "PATCH", d, `?id=eq.${id}`),
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -49,6 +51,7 @@ function addBD(ds,n,inh){ if(!ds||n<=0)return null; const s=iSet(inh); let d=new
 function bdBtw(a,b,inh){ const s=iSet(inh); let x=new Date(a+"T12:00:00"),y=new Date(b+"T12:00:00"),neg=false; if(y<x){[x,y]=[y,x];neg=true;} let c=0,cur=new Date(x); while(cur<y){cur.setDate(cur.getDate()+1);if(!isWE(cur)&&!s.has(cur.toISOString().split("T")[0]))c++;} return neg?-c:c; }
 const td = () => new Date().toISOString().split("T")[0];
 function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return `${parseInt(p[2])} ${m[parseInt(p[1])-1]} ${p[0]}`; }
+function fmtLong(d){ if(!d)return""; const p=d.split("-"),m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]; return `${parseInt(p[2])} de ${m[parseInt(p[1])-1]} de ${p[0]}`; }
 
 // ═══════════════════════════════════════════════════════════════
 // CHECKLIST TEMPLATES
@@ -224,7 +227,7 @@ function generarConcepto(p){
   else if(p.name==="Constitución de Sociedad")base=`Seguimiento para la formalización ante fedatario público de la Constitución de la sociedad ${p.cliente||""}`;
   else if(p.name==="Compraventa")base=`Seguimiento para la formalización ante fedatario público de la Compraventa del inmueble ${p.cliente||""}`;
   else base=`Seguimiento para la formalización ante fedatario público de ${p.name} ${p.cliente||""}`;
-  if(p.fechaActo)base+=`, celebrada el ${fmt(p.fechaActo)}`;
+  if(p.fechaActo)base+=`, celebrada el ${fmtLong(p.fechaActo)}`;
   return base.trim();
 }
 
@@ -256,12 +259,12 @@ function enviarCorreoCobranza(p){
   const cc="j.rojas@alonsoycia.com.mx,juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx";
   const subject=`Seguimiento de cobranza — ${p.name} ${p.cliente||""}`;
   const neto=p.cliFacturaNeto?`$${p.cliFacturaNeto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
-  const body=`Hola Elo, ¿nos podrías ayudar por favor a presionar al cliente con el pago de la factura?
+  const body=`Hola Elo, ¿nos podrías ayudar por favor a presionar al cliente con el pago de la factura del proyecto que se indica a continuación?
 
 Proyecto: ${p.name}
 Cliente: ${p.cliente||"—"}
-Monto: ${neto}
-${p.cliFacturaEnviarA?`Contacto del cliente: ${p.cliFacturaEnviarA}`:""}
+Monto: ${neto}${p.cliFacturaEnviarA?`
+Contacto del cliente: ${p.cliFacturaEnviarA}`:""}
 
 Muchas gracias.`;
   const url=`mailto:${encodeURIComponent(to)}?cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -514,20 +517,24 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
                   }}>📧 Enviar solicitud a administración</Bt>
                   {p.facturaSolicitada&&<Bg bg="#f0fdf4" color="#16a34a" style={{marginLeft:8}}>✓ Solicitada {p.facturaSolicitadaAt?fmt(p.facturaSolicitadaAt.split("T")[0]):""}</Bg>}
                 </>}
-                {/* Cliente pagado controls */}
-                {p.cliPagoTipo&&<div style={{marginTop:14,padding:12,borderRadius:10,background:p.clientePagado?"#f0fdf4":"#fffbeb",border:`1px solid ${p.clientePagado?"#16a34a":"#fde68a"}30`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700,color:p.clientePagado?"#16a34a":"#92400e"}}>{p.clientePagado?"✓ Cliente pagó":"⏳ Pendiente de pago del cliente"}</div>
-                      {p.clientePagado&&p.clientePagadoPor&&<div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Marcado por {p.clientePagadoPor} {p.clientePagadoAt?`— ${fmt(p.clientePagadoAt.split("T")[0])}`:""}</div>}
-                    </div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {!p.clientePagado&&p.facturaSolicitada&&<Bt v="w" onClick={()=>enviarCorreoCobranza(p)} style={{fontSize:11,padding:"6px 12px"}}>📧 Pedir presionar a cliente</Bt>}
-                      {!p.clientePagado&&<Bt v="p" onClick={()=>onMarkClientePagado(p.id)} style={{fontSize:11,padding:"6px 12px"}}>✓ Marcar pagado</Bt>}
-                      {p.clientePagado&&<Bt v="w" onClick={()=>onUndoClientePagado(p.id)} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>}
-                    </div>
+              </div>
+            )}
+
+            {/* Show verificacion de pago panel */}
+            {e.id==="verif_pago"&&(isAct||isDone)&&(
+              <div style={{marginTop:8,marginLeft:48,padding:14,borderRadius:10,background:p.clientePagado?"#f0fdf4":"#fffbeb",border:`1px solid ${p.clientePagado?"#16a34a":"#fde68a"}40`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:p.clientePagado?"#16a34a":"#92400e"}}>{p.clientePagado?"✓ Cliente pagó":"⏳ Pendiente de pago del cliente"}</div>
+                    {p.clientePagado&&p.clientePagadoPor&&<div style={{fontSize:11,color:"#8a857c",marginTop:3}}>Marcado por {p.clientePagadoPor}{p.clientePagadoAt?` — ${fmt(p.clientePagadoAt.split("T")[0])}`:""}</div>}
+                    {!p.clientePagado&&!p.facturaSolicitada&&p.cliPagoTipo&&p.cliPagoTipo!=="efectivo"&&<div style={{fontSize:11,color:"#8a857c",marginTop:3}}>Primero envía la solicitud de factura</div>}
                   </div>
-                </div>}
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {!p.clientePagado&&p.facturaSolicitada&&<Bt v="w" onClick={()=>enviarCorreoCobranza(p)} style={{fontSize:11,padding:"6px 12px"}}>📧 Pedir presionar a cliente</Bt>}
+                    {!p.clientePagado&&<Bt v="p" onClick={()=>onMarkClientePagado(p.id)} style={{fontSize:12,padding:"7px 14px"}}>✓ Verificar pago</Bt>}
+                    {p.clientePagado&&<Bt v="w" onClick={()=>onUndoClientePagado(p.id)} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -966,10 +973,12 @@ function Cal({inh,addInh,delInh,notarias,role,nid}){
 // ═══════════════════════════════════════════════════════════════
 // NOTARIAS ADMIN
 // ═══════════════════════════════════════════════════════════════
-function NotAdmin({notarias,onCreate,onUpdate,onDelete}){
+function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSystemUser}){
   const[show,setShow]=useState(false);
   const[f,setF]=useState({name:"",username:"",password:""});
   const[editing,setEditing]=useState(null);
+  const[editingSys,setEditingSys]=useState(null);
+  const[sysPass,setSysPass]=useState("");
   const up=(k,v)=>setF(o=>({...o,[k]:v}));
   const save=async()=>{
     if(!f.name.trim()||!f.username.trim()||!f.password.trim())return;
@@ -977,39 +986,72 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete}){
     else await onCreate(f);
     setF({name:"",username:"",password:""});setShow(false);
   };
+  const saveSysPass=async(id)=>{
+    if(!sysPass.trim())return;
+    await onUpdateSystemUser(id,{password:sysPass});
+    setEditingSys(null);setSysPass("");
+  };
   return(
-    <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-        <div><div style={{fontSize:16,fontWeight:700}}>📜 Administrar notarías</div><div style={{fontSize:12,color:"#8a857c",marginTop:2}}>Agrega, edita o elimina notarías del sistema</div></div>
-        <Bt onClick={()=>{setShow(!show);setEditing(null);setF({name:"",username:"",password:""});}}>+ Agregar notaría</Bt>
-      </div>
-      {(show||editing)&&(
-        <div style={{padding:18,borderRadius:12,background:"#f8f7f5",marginBottom:18}}>
-          <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>{editing?"Editar notaría":"Nueva notaría"}</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:14}}>
-            <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Nombre</div><input style={iS} value={f.name} onChange={e=>up("name",e.target.value)} placeholder="Notaría XX de..."/></div>
-            <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Usuario</div><input style={iS} value={f.username} onChange={e=>up("username",e.target.value)} placeholder="notariaXX"/></div>
-            <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Contraseña</div><input style={iS} value={f.password} onChange={e=>up("password",e.target.value)} placeholder="Contraseña"/></div>
-          </div>
-          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-            <Bt v="g" onClick={()=>{setShow(false);setEditing(null);}}>Cancelar</Bt>
-            <Bt onClick={save}>{editing?"Guardar cambios":"Agregar"}</Bt>
-          </div>
+    <div>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:18}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+          <div><div style={{fontSize:16,fontWeight:700}}>📜 Administrar notarías</div><div style={{fontSize:12,color:"#8a857c",marginTop:2}}>Agrega, edita o elimina notarías del sistema</div></div>
+          <Bt onClick={()=>{setShow(!show);setEditing(null);setF({name:"",username:"",password:""});}}>+ Agregar notaría</Bt>
         </div>
-      )}
-      {!notarias.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>No hay notarías registradas</div>:
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {notarias.map(n=>(
-            <div key={n.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",borderRadius:10,background:"#f8f7f5"}}>
-              <div><div style={{fontSize:14,fontWeight:600}}>{n.name}</div><div style={{fontSize:12,color:"#8a857c"}}>Usuario: {n.username}</div></div>
-              <div style={{display:"flex",gap:6}}>
-                <button onClick={()=>{setEditing(n.id);setF({name:n.name,username:n.username,password:n.password});setShow(false);}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>✏️ Editar</button>
-                <button onClick={()=>onDelete(n.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>🗑 Eliminar</button>
-              </div>
+        {(show||editing)&&(
+          <div style={{padding:18,borderRadius:12,background:"#f8f7f5",marginBottom:18}}>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>{editing?"Editar notaría":"Nueva notaría"}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:14}}>
+              <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Nombre</div><input style={iS} value={f.name} onChange={e=>up("name",e.target.value)} placeholder="Notaría XX de..."/></div>
+              <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Usuario</div><input style={iS} value={f.username} onChange={e=>up("username",e.target.value)} placeholder="notariaXX"/></div>
+              <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:4}}>Contraseña</div><input style={iS} value={f.password} onChange={e=>up("password",e.target.value)} placeholder="Contraseña"/></div>
             </div>
-          ))}
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Bt v="g" onClick={()=>{setShow(false);setEditing(null);}}>Cancelar</Bt>
+              <Bt onClick={save}>{editing?"Guardar cambios":"Agregar"}</Bt>
+            </div>
+          </div>
+        )}
+        {!notarias.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>No hay notarías registradas</div>:
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {notarias.map(n=>(
+              <div key={n.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",borderRadius:10,background:"#f8f7f5"}}>
+                <div><div style={{fontSize:14,fontWeight:600}}>{n.name}</div><div style={{fontSize:12,color:"#8a857c"}}>Usuario: {n.username}</div></div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>{setEditing(n.id);setF({name:n.name,username:n.username,password:n.password});setShow(false);}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>✏️ Editar</button>
+                  <button onClick={()=>onDelete(n.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>🗑 Eliminar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        }
+      </div>
+
+      {/* System users (admin, etc) */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24}}>
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:16,fontWeight:700}}>🔐 Usuarios del sistema</div>
+          <div style={{fontSize:12,color:"#8a857c",marginTop:2}}>Cambiar contraseñas de administración y otros usuarios especiales</div>
         </div>
-      }
+        {!systemUsers.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>No hay usuarios del sistema</div>:
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {systemUsers.map(s=>(
+              <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",borderRadius:10,background:"#f8f7f5",flexWrap:"wrap",gap:8}}>
+                <div><div style={{fontSize:14,fontWeight:600}}>{s.label}</div><div style={{fontSize:12,color:"#8a857c"}}>Usuario: {s.username} — Rol: {s.role}</div></div>
+                {editingSys===s.id?(
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input type="text" style={{...iS,width:200,padding:"7px 10px",fontSize:13}} value={sysPass} onChange={e=>setSysPass(e.target.value)} placeholder="Nueva contraseña" autoFocus/>
+                    <Bt onClick={()=>saveSysPass(s.id)} disabled={!sysPass.trim()} style={{fontSize:11,padding:"6px 12px"}}>Guardar</Bt>
+                    <Bt v="g" onClick={()=>{setEditingSys(null);setSysPass("");}} style={{fontSize:11,padding:"6px 12px"}}>Cancelar</Bt>
+                  </div>
+                ):(
+                  <button onClick={()=>{setEditingSys(s.id);setSysPass("");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>🔑 Cambiar contraseña</button>
+                )}
+              </div>
+            ))}
+          </div>
+        }
+      </div>
     </div>
   );
 }
@@ -1092,7 +1134,6 @@ function AdminView({ps, onMarkPagado, onAddNotaCobranza, session}){
           </div>
 
           <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginBottom:14,flexWrap:"wrap"}}>
-            {!sel.clientePagado&&<Bt v="w" onClick={()=>enviarCorreoCobranza(sel)} style={{fontSize:12}}>📧 Pedir presionar al cliente</Bt>}
             {!sel.clientePagado?<Bt onClick={()=>onMarkPagado(sel.id)}>✓ Marcar pagado por el cliente</Bt>:
               <Bg bg="#f0fdf4" color="#16a34a">✓ Marcado como pagado por {sel.clientePagadoPor} el {sel.clientePagadoAt?fmt(sel.clientePagadoAt.split("T")[0]):"—"}</Bg>}
           </div>
@@ -1158,14 +1199,14 @@ function NotasCobranzaPanel({notas,onAdd,session}){
 // AUTH
 // ═══════════════════════════════════════════════════════════════
 const ALONSO_USER={user:"alonso",pass:"Alonso2025!",role:"alonso",label:"Alonso y Cía"};
-const ADMIN_USER={user:"administracion",pass:"Admin2025!",role:"admin",label:"Administración"};
-function Login({onLogin,notarias}){
+function Login({onLogin,notarias,systemUsers}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);
   const go=()=>{
     const ul=u.trim().toLowerCase();
     if(ul===ALONSO_USER.user&&p===ALONSO_USER.pass){setErr("");onLogin({...ALONSO_USER});return;}
-    if(ul===ADMIN_USER.user&&p===ADMIN_USER.pass){setErr("");onLogin({...ADMIN_USER});return;}
-    const not=notarias.find(n=>n.username===ul&&n.password===p);
+    const sysUser=systemUsers.find(su=>su.username.toLowerCase()===ul&&su.password===p);
+    if(sysUser){setErr("");onLogin({user:sysUser.username,pass:sysUser.password,role:sysUser.role,label:sysUser.label});return;}
+    const not=notarias.find(n=>n.username.toLowerCase()===ul&&n.password===p);
     if(not){setErr("");onLogin({user:not.username,pass:not.password,role:"notaria",label:not.name,notariaId:not.id});return;}
     setErr("Usuario o contraseña incorrectos");
   };
@@ -1194,17 +1235,36 @@ function Login({onLogin,notarias}){
 export default function App(){
   const[session,setSession]=useState(null);
   const[notarias,setNotarias]=useState([]);
+  const[systemUsers,setSystemUsers]=useState([]);
   const[loading,setLoading]=useState(true);
-  useEffect(()=>{(async()=>{const n=await db.getNotarias();setNotarias(n||[]);setLoading(false);})();},[]);
+  useEffect(()=>{
+    (async()=>{
+      const[n,su]=await Promise.all([db.getNotarias(),db.getSystemUsers()]);
+      setNotarias(n||[]);setSystemUsers(su||[]);
+      try{
+        const saved=localStorage.getItem("cn_session");
+        if(saved){const s=JSON.parse(saved);if(s&&s.role)setSession(s);}
+      }catch(e){}
+      setLoading(false);
+    })();
+  },[]);
+  const handleLogin=(s)=>{
+    setSession(s);
+    try{localStorage.setItem("cn_session",JSON.stringify(s));}catch(e){}
+  };
+  const handleLogout=()=>{
+    setSession(null);
+    try{localStorage.removeItem("cn_session");}catch(e){}
+  };
   if(loading)return <div style={{fontFamily:"'Source Sans 3',sans-serif",background:"#faf9f7",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/><div style={{fontSize:14,fontWeight:600,color:"#8a857c"}}>Cargando...</div></div>;
-  if(!session)return <Login onLogin={s=>setSession(s)} notarias={notarias}/>;
-  return <Dash session={session} notarias={notarias} setNotarias={setNotarias} onLogout={()=>setSession(null)}/>;
+  if(!session)return <Login onLogin={handleLogin} notarias={notarias} systemUsers={systemUsers}/>;
+  return <Dash session={session} notarias={notarias} setNotarias={setNotarias} systemUsers={systemUsers} setSystemUsers={setSystemUsers} onLogout={handleLogout}/>;
 }
 
 // ═══════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════
-function Dash({session,notarias,setNotarias,onLogout}){
+function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}){
   const role=session.role,nid=session.notariaId||null;
   const[vista,setVista]=useState("dashboard");
   const[ps,setPs]=useState([]);
@@ -1398,6 +1458,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
   const createNot=useCallback(async(f)=>{const r=await db.createNotaria(f);if(r)setNotarias(prev=>[...prev,...(Array.isArray(r)?r:[r])]);},[]);
   const updateNot=useCallback(async(id,f)=>{await db.updateNotaria(id,f);setNotarias(prev=>prev.map(n=>n.id===id?{...n,...f}:n));},[]);
   const deleteNot=useCallback(async(id)=>{await db.deleteNotaria(id);setNotarias(prev=>prev.filter(n=>n.id!==id));},[]);
+  const updateSystemUser=useCallback(async(id,f)=>{await db.updateSystemUser(id,f);setSystemUsers(prev=>prev.map(s=>s.id===id?{...s,...f}:s));},[setSystemUsers]);
 
   const isMyTurn=(p)=>{
     if(p.archivado)return false;
@@ -1575,7 +1636,7 @@ function Dash({session,notarias,setNotarias,onLogout}){
         {vista==="efectividad"&&<EffPanel ps={ps} inh={inh} inhFor={inhFor} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
         {vista==="metricas"&&<MetricsPanel ps={ps} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
         {vista==="dias"&&<Cal inh={inh} addInh={addInh} delInh={delInh} notarias={notarias} role={role} nid={nid}/>}
-        {vista==="notarias"&&role==="alonso"&&<NotAdmin notarias={notarias} onCreate={createNot} onUpdate={updateNot} onDelete={id=>setCfm({msg:"¿Eliminar esta notaría?",action:()=>deleteNot(id)})}/>}
+        {vista==="notarias"&&role==="alonso"&&<NotAdmin notarias={notarias} onCreate={createNot} onUpdate={updateNot} onDelete={id=>setCfm({msg:"¿Eliminar esta notaría?",action:()=>deleteNot(id)})} systemUsers={systemUsers} onUpdateSystemUser={updateSystemUser}/>}
       </div>
     </div>
   );
