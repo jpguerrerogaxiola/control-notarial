@@ -170,6 +170,8 @@ function calcRetrasoAcumulado(p, etapaId, inh){
 const td = () => new Date().toISOString().split("T")[0];
 function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return `${parseInt(p[2])} ${m[parseInt(p[1])-1]} ${p[0]}`; }
 function fmtLong(d){ if(!d)return""; const p=d.split("-"),m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]; return `${parseInt(p[2])} de ${m[parseInt(p[1])-1]} de ${p[0]}`; }
+// Normalize responsable name for filtering (trim + lowercase)
+function normResp(s){ return (s||"").trim().toLowerCase(); }
 
 // ═══════════════════════════════════════════════════════════════
 // CHECKLIST TEMPLATES
@@ -318,7 +320,7 @@ function dbToApp(r){
     facturaSolicitada:r.factura_solicitada||false,facturaSolicitadaAt:r.factura_solicitada_at,
     facturaEmitidaNum:r.factura_emitida_num||"",facturaEmitidaAt:r.factura_emitida_at,
     clientePagado:r.cliente_pagado||false,clientePagadoAt:r.cliente_pagado_at,clientePagadoPor:r.cliente_pagado_por||"",
-    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[],expediente:r.expediente||[]};
+    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[],expediente:r.expediente||[],csfSociedad:r.csf_sociedad||null};
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -357,8 +359,7 @@ function enviarCorreoFactura(p,notariaObj,onSent){
   const bruto=p.cliFacturaBruto?`$${p.cliFacturaBruto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
   const neto=p.cliFacturaNeto?`$${p.cliFacturaNeto.toLocaleString("es-MX",{minimumFractionDigits:2})}`:"—";
   const concepto=p.cliFacturaConcepto||generarConcepto(p);
-  // Find CSF sociedad file if exists
-  const csf=(p.expediente||[]).find(f=>f.es_csf_sociedad);
+  const csf=p.csfSociedad;
   const body=`Elo, buen día, te pido por favor nos ayudes a emitir un CFDI con las siguientes características:
 
 Cliente: ${p.cliente||"—"}
@@ -367,7 +368,7 @@ Monto bruto: ${bruto}
 Monto neto (con IVA): ${neto}
 Enviar a: ${p.cliFacturaEnviarA||"—"}
 ${csf?`
-Constancia de Situación Fiscal del cliente: ${csf.url}`:""}
+Constancia de Situación Fiscal de la sociedad: ${csf.url}`:""}
 
 Muchas gracias.
 
@@ -382,7 +383,6 @@ function enviarCorreoNotaria(p,notariaObj){
   const to=notariaObj.emails;
   const cc="juanpablo@alonsoycia.com.mx,juancarlos@alonsoycia.com.mx,rodrigo@alonsoycia.com.mx,j.rojas@alonsoycia.com.mx";
   const subject=`Nuevo proyecto cargado — ${p.name} ${p.cliente||""}`;
-  const expedienteList=(p.expediente||[]).map(f=>`• ${f.nombre}: ${f.url}`).join("\n");
   const body=`Buen día,
 
 Les informamos que hemos cargado un nuevo proyecto en la plataforma de Control Notarial con los siguientes datos:
@@ -392,10 +392,7 @@ Cliente: ${p.cliente||"—"}
 Tipo: ${TIPO_L[p.tipo]||p.tipo}
 ${p.fechaActo?`Fecha del acto: ${fmtLong(p.fechaActo)}`:""}
 
-Documentos disponibles en el expediente digital:
-${expedienteList||"(ninguno aún)"}
-
-Pueden descargarlos directamente desde su panel de Control Notarial, o desde los enlaces anteriores.
+Pueden descargar los documentos del expediente directamente desde su panel de Control Notarial.
 
 Saludos,
 Alonso y Cía`;
@@ -473,7 +470,7 @@ function ChecklistView({ checklist, escenario, onUpdate, onAddGroup, onRemoveGro
   const doneDocs = groups.reduce((acc,gid)=>acc+(checklist[gid]?.docs?.filter(d=>d.done).length||0),0);
 
   // Auto-detect if scenario allows multiple persons
-  const canAddPersonGroups = ["acta_externo","compraventa","constitucion"].includes(escenario);
+  const canAddPersonGroups = ["acta_interno","acta_externo","compraventa","constitucion"].includes(escenario);
 
   return(
     <div>
@@ -542,7 +539,7 @@ function ChecklistView({ checklist, escenario, onUpdate, onAddGroup, onRemoveGro
 // ═══════════════════════════════════════════════════════════════
 // PRE-PIPELINE (etapas previas de Alonso)
 // ═══════════════════════════════════════════════════════════════
-function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onUpdatePagoCliente, onSetObs, onClearObs, onMarkFacturaSolicitada, onMarkClientePagado, onUndoClientePagado}){
+function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onUpdatePagoCliente, onSetObs, onClearObs, onMarkFacturaSolicitada, onMarkClientePagado, onUndoClientePagado, onUploadCSF, onRemoveCSF}){
   const [editingDate, setEditingDate] = useState(null);
   const [dateVal, setDateVal] = useState("");
   const [showObsFor, setShowObsFor] = useState(null);
@@ -661,6 +658,32 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
                     <div style={{fontSize:11,fontWeight:600,color:"#8a857c",marginBottom:3}}>Enviar factura a (nombre y/o correo)</div>
                     <input style={iS} value={p.cliFacturaEnviarA||""} onChange={ev=>onUpdatePagoCliente(p.id,{cliFacturaEnviarA:ev.target.value})} placeholder="Ej: Juan Pérez, juan@empresa.com"/>
                   </div>
+                  {/* CSF de la sociedad */}
+                  <div style={{marginBottom:12,padding:12,borderRadius:10,background:"#f5f3ff",border:"1px solid #7c3aed30"}}>
+                    <div style={{fontSize:12,fontWeight:700,color:"#7c3aed",marginBottom:6}}>⭐ Constancia de Situación Fiscal de la sociedad</div>
+                    {p.csfSociedad?(
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderRadius:8,background:"#fff",gap:10,flexWrap:"wrap"}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.csfSociedad.nombre}</div>
+                          <div style={{fontSize:10,color:"#8a857c"}}>Subido el {fmt(p.csfSociedad.uploaded_at.split("T")[0])}</div>
+                        </div>
+                        <div style={{display:"flex",gap:5}}>
+                          <a href={p.csfSociedad.url} download={p.csfSociedad.nombre} target="_blank" rel="noopener noreferrer" style={{padding:"5px 10px",borderRadius:6,background:"#7c3aed",color:"#fff",fontSize:11,fontWeight:600,textDecoration:"none",fontFamily:"inherit"}}>⬇ Ver</a>
+                          <button onClick={async()=>{if(confirm("¿Eliminar CSF actual?")){await onRemoveCSF(p.id);}}} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>✕ Quitar</button>
+                        </div>
+                      </div>
+                    ):(
+                      <div style={{fontSize:11,color:"#8a857c",marginBottom:6}}>Sin CSF cargada. Súbela para que se incluya automáticamente en el correo a administración.</div>
+                    )}
+                    <div style={{marginTop:6}}>
+                      <input type="file" onChange={async(ev)=>{
+                        const file=ev.target.files?.[0];
+                        if(!file)return;
+                        await onUploadCSF(p.id,file);
+                        ev.target.value="";
+                      }} style={{fontSize:11,fontFamily:"inherit"}}/>
+                    </div>
+                  </div>
                   <Bt onClick={()=>{
                     if(!p.cliFacturaBruto||!p.cliFacturaEnviarA){alert("Faltan datos: monto bruto y destinatario son obligatorios");return;}
                     enviarCorreoFactura(p,null,()=>onMarkFacturaSolicitada(p.id));
@@ -708,8 +731,10 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
 // ═══════════════════════════════════════════════════════════════
 // PIPELINE NORMAL (con notaría)
 // ═══════════════════════════════════════════════════════════════
-function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo,onAddFile,onRemoveFile,onNotifyNotaria,onToggleCSF}){
+function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo,onAddFile,onRemoveFile,onNotifyNotaria}){
   const etapas=getEt(p.tipo),envDone=p.etapas.envio?.done;
+  // Etapas ocultas para notaría
+  const HIDDEN_FOR_NOTARIA = new Set(["proyeccion","envio_cliente","envio_cc","envio_test"]);
   const [editingDate,setEditingDate]=useState(null);
   const [dateVal,setDateVal]=useState("");
   const [showObsFor,setShowObsFor]=useState(null);
@@ -730,7 +755,11 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 
       {(()=>{
         const idealDates = computeIdealDates(p, inh);
+        // Steps hidden for notaría role
+        const hiddenForNotaria = ["proyeccion","envio_cliente","envio_cc","envio_test"];
         return etapas.map((e,i)=>{
+        // Skip rendering if notaria and this step is hidden
+        if(role==="notaria"&&hiddenForNotaria.includes(e.id))return null;
         const d=p.etapas[e.id],info=getSt(p,i,inh);
         const isAct=i===p.step&&!p.finished;
         const canAct=isAct&&(role==="alonso"||e.owner==="notaria");
@@ -926,7 +955,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
             {/* Expediente digital inside envio step */}
             {isEnvio&&(
               <div style={{marginLeft:48,marginRight:4,marginTop:6}}>
-                <ExpedienteView p={p} role={role} onAddFile={onAddFile} onRemoveFile={onRemoveFile} onNotifyNotaria={onNotifyNotaria} onToggleCSF={onToggleCSF}/>
+                <ExpedienteView p={p} role={role} onAddFile={onAddFile} onRemoveFile={onRemoveFile} onNotifyNotaria={onNotifyNotaria}/>
               </div>
             )}
 
@@ -942,7 +971,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 // ═══════════════════════════════════════════════════════════════
 // EXPEDIENTE DIGITAL
 // ═══════════════════════════════════════════════════════════════
-function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria, onToggleCSF}){
+function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria}){
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState({current:0,total:0});
   const [dragOver, setDragOver] = useState(false);
@@ -970,7 +999,6 @@ function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria, onTo
           size: file.size,
           uploaded_at: new Date().toISOString(),
           uploaded_by: role,
-          es_csf_sociedad: false,
         };
         await onAddFile(p.id, entry);
       } else {
@@ -1022,7 +1050,7 @@ function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria, onTo
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:14,fontWeight:700}}>📎 Expediente digital ({expediente.length})</div>
-          <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>{role==="alonso"?"Sube los documentos del expediente. Arrastra archivos o selecciona múltiples. Marca la CSF de la sociedad con la estrella ⭐.":"Documentos cargados por Alonso y Cía"}</div>
+          <div style={{fontSize:11,color:"#8a857c",marginTop:2}}>{role==="alonso"?"Sube los documentos del expediente. Arrastra archivos o selecciona múltiples.":"Documentos cargados por Alonso y Cía"}</div>
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {expediente.length>0&&<Bt v="g" onClick={downloadAll} style={{fontSize:11,padding:"6px 12px"}}>📥 Descargar todos (ZIP)</Bt>}
@@ -1059,21 +1087,10 @@ function ExpedienteView({p, role, onAddFile, onRemoveFile, onNotifyNotaria, onTo
       {!expediente.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin documentos cargados aún</div>:
         <div style={{display:"flex",flexDirection:"column",gap:5}}>
           {expediente.map((f)=>(
-            <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:f.es_csf_sociedad?"#f5f3ff":"#f8f7f5",border:f.es_csf_sociedad?"1px solid #7c3aed40":"1px solid transparent"}}>
-              <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:10}}>
-                {canEdit&&(
-                  <button onClick={()=>onToggleCSF(p.id,f.id)} title={f.es_csf_sociedad?"Quitar marca de CSF":"Marcar como CSF de sociedad"} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,padding:0,lineHeight:1}}>
-                    {f.es_csf_sociedad?"⭐":"☆"}
-                  </button>
-                )}
-                {!canEdit&&f.es_csf_sociedad&&<span style={{fontSize:18,lineHeight:1}}>⭐</span>}
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {f.nombre}
-                    {f.es_csf_sociedad&&<span style={{fontSize:10,color:"#7c3aed",marginLeft:8,fontWeight:700}}>CSF SOCIEDAD</span>}
-                  </div>
-                  <div style={{fontSize:11,color:"#8a857c"}}>{fmtSize(f.size)} — Subido por {f.uploaded_by} el {fmt(f.uploaded_at.split("T")[0])}</div>
-                </div>
+            <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 13px",borderRadius:10,background:"#f8f7f5"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.nombre}</div>
+                <div style={{fontSize:11,color:"#8a857c"}}>{fmtSize(f.size)} — Subido por {f.uploaded_by} el {fmt(f.uploaded_at.split("T")[0])}</div>
               </div>
               <div style={{display:"flex",gap:6}}>
                 <a href={f.url} download={f.nombre} target="_blank" rel="noopener noreferrer" style={{padding:"6px 12px",borderRadius:8,background:"#2563eb",color:"#fff",fontSize:11,fontWeight:600,textDecoration:"none",fontFamily:"inherit"}}>⬇ Descargar</a>
@@ -1834,10 +1851,14 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const[showForm,setShowForm]=useState(false);
   const[filtro,setFiltro]=useState("activos");
   const[filtNot,setFiltNot]=useState("");
+  const[filtResp,setFiltResp]=useState("");
   const[search,setSearch]=useState("");
   const[cfm,setCfm]=useState(null);
   const[loading,setLoading]=useState(true);
   const[showConfetti,setShowConfetti]=useState(false);
+
+  // Normalize responsible name for matching
+  const normResp=(s)=>(s||"").trim().toLowerCase();
 
   const inhFor=useCallback((notariaId)=>inh.filter(d=>!d.nid||d.nid===notariaId),[inh]);
 
@@ -1870,6 +1891,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("notasCobranza"in upd)d.notas_cobranza=upd.notasCobranza;
     if("facturaLog"in upd)d.factura_log=upd.facturaLog;
     if("expediente"in upd)d.expediente=upd.expediente;
+    if("csfSociedad"in upd)d.csf_sociedad=upd.csfSociedad;
     await db.updateProject(id,d);
   };
 
@@ -2032,6 +2054,34 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     }));
   },[]);
 
+  const uploadCSFSociedad=useCallback(async(pid,file)=>{
+    // If there's already a CSF, delete the old one from storage
+    const currentP=ps.find(x=>x.id===pid);
+    if(currentP?.csfSociedad?.url){
+      try{await deleteFile(currentP.csfSociedad.url);}catch(e){}
+    }
+    const url=await uploadFile(pid,file);
+    if(!url){alert("Error al subir CSF. Revisa que el bucket 'expediente' esté configurado.");return;}
+    const entry={nombre:file.name,url,tipo:file.type,size:file.size,uploaded_at:new Date().toISOString()};
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      save(pid,{csfSociedad:entry});
+      return{...p,csfSociedad:entry};
+    }));
+  },[ps]);
+
+  const removeCSFSociedad=useCallback(async(pid)=>{
+    const currentP=ps.find(x=>x.id===pid);
+    if(currentP?.csfSociedad?.url){
+      try{await deleteFile(currentP.csfSociedad.url);}catch(e){}
+    }
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      save(pid,{csfSociedad:null});
+      return{...p,csfSociedad:null};
+    }));
+  },[ps]);
+
   // Mark factura solicitada (when user clicks email button)
   const markFacturaSolicitada=useCallback(async(pid)=>{
     const now=new Date().toISOString();
@@ -2113,7 +2163,16 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   };
 
   // Notarías only see projects with preDone=true
-  const baseVisiblePs=role==="notaria"?ps.filter(p=>p.notariaId===nid&&p.preDone):filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
+  const baseVisiblePsRaw=role==="notaria"?ps.filter(p=>p.notariaId===nid&&p.preDone):filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
+  const baseVisiblePs=filtResp?baseVisiblePsRaw.filter(p=>normResp(p.respNotaria)===filtResp):baseVisiblePsRaw;
+
+  // Build unique responsibles for dropdown (keyed by normalized name, displayed with original case of first occurrence)
+  const respSet=new Map();
+  baseVisiblePsRaw.forEach(p=>{
+    const n=normResp(p.respNotaria);
+    if(n&&!respSet.has(n))respSet.set(n,(p.respNotaria||"").trim());
+  });
+  const respList=Array.from(respSet.entries()).sort((a,b)=>a[1].localeCompare(b[1]));
 
   const filtered=useMemo(()=>{
     return baseVisiblePs.filter(p=>{
@@ -2175,6 +2234,12 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
             <select style={fS} value={filtNot} onChange={e=>setFiltNot(e.target.value)}>
               <option value="">Todas las notarías</option>
               {notarias.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+            </select>
+          )}
+          {respList.length>0&&(
+            <select style={fS} value={filtResp} onChange={e=>setFiltResp(e.target.value)}>
+              <option value="">Todos los responsables</option>
+              {respList.map(([key,label])=><option key={key} value={key}>{label}</option>)}
             </select>
           )}
           <button onClick={onLogout} style={{padding:"7px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"transparent",color:"#8a857c",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
@@ -2266,10 +2331,10 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               </div>
 
               {/* Pre-pipeline (only alonso) - always visible if not yet started or in progress; collapsible if done */}
-              {role==="alonso"&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs} onMarkFacturaSolicitada={markFacturaSolicitada} onMarkClientePagado={markClientePagado} onUndoClientePagado={undoClientePagado}/>}
+              {role==="alonso"&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs} onMarkFacturaSolicitada={markFacturaSolicitada} onMarkClientePagado={markClientePagado} onUndoClientePagado={undoClientePagado} onUploadCSF={uploadCSFSociedad} onRemoveCSF={removeCSFSociedad}/>}
 
               {/* Main pipeline */}
-              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria} onToggleCSF={toggleCSF}/>}
+              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria}/>}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
