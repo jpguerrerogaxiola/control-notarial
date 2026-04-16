@@ -353,7 +353,7 @@ function dbToApp(r){
     sfggCobrado:r.sfgg_cobrado||false,sfggCobradoAt:r.sfgg_cobrado_at,sfggNotas:r.sfgg_notas||[],
     registroLugar:r.registro_lugar||"local",oficinaRegistral:r.oficina_registral||"",
     entregablesDetalle:r.entregables_detalle||[],entregablesListos:r.entregables_listos||false,
-    entregablesListosAt:r.entregables_listos_at,entregablesComentarios:r.entregables_comentarios||[]};
+    entregablesListosAt:r.entregables_listos_at,entregablesComentarios:r.entregables_comentarios||[],modificaciones:r.modificaciones||[]};
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -924,6 +924,13 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 
                 {/* Escritura number on firma step */}
                 {isFirma&&(d?.done||isAct)&&(
+                  <div>
+                    {/* Message that notaría completed folios */}
+                    {p.etapas?.folios?.done&&p.etapas?.folios?.end&&(
+                      <div style={{marginTop:6,marginBottom:6,padding:"6px 12px",borderRadius:8,background:"#f0fdf4",fontSize:11,color:"#16a34a",fontWeight:600}}>
+                        ✓ Notaría marcó listo para firma el {fmt(p.etapas.folios.end)}
+                      </div>
+                    )}
                   <div style={{marginTop:8,padding:"8px 12px",borderRadius:8,background:"#eff6ff",display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontSize:11,fontWeight:700,color:"#2563eb"}}>📜 Núm. Escritura:</span>
                     {!editingEscritura?(
@@ -938,6 +945,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                         <button onClick={()=>setEditingEscritura(false)} style={{background:"#f1f0ed",color:"#8a857c",border:"none",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer"}}>✕</button>
                       </>
                     )}
+                  </div>
                   </div>
                 )}
 
@@ -1446,6 +1454,67 @@ function CobranzaPanel({ps, notarias, filtNot, onSelect}){
           <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:12,background:"#2563eb",borderRadius:3}}></div><span style={{fontSize:11}}>Facturado</span></div>
           <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:12,background:"#16a34a",borderRadius:3}}></div><span style={{fontSize:11}}>Cobrado</span></div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PAGOS A NOTARÍA PANEL (para ambos roles)
+// ═══════════════════════════════════════════════════════════════
+function PagosNotariaPanel({ps,notarias,filtNot,role,nid,onSelect}){
+  const base=role==="notaria"?ps.filter(p=>p.notariaId===nid&&p.preDone):filtNot?ps.filter(p=>p.notariaId===filtNot):ps;
+  // Solo proyectos que ya pasaron el paso de envío a notaría
+  const visPs=base.filter(p=>p.preDone&&p.etapas?.envio?.done);
+  const fmtMoney=(n)=>`$${(n||0).toLocaleString("es-MX",{minimumFractionDigits:2})}`;
+
+  // Clasificar cada proyecto en su estado de pago
+  const classify=(p)=>{
+    if(p.pagoMarcado)return{status:"pagado",label:"✓ Pagado",color:"#16a34a",bg:"#f0fdf4"};
+    if(p.pagoEfectivo)return{status:"efectivo_pendiente",label:"💵 Efectivo — No han pagado",color:"#dc2626",bg:"#fef2f2"};
+    if(p.factSent)return{status:"factura_sin_pagar",label:"📄 Factura recibida — Pendiente de pago",color:"#dc2626",bg:"#fef2f2"};
+    if(p.etapas?.facturacion?.done||p.factSent)return{status:"factura_enviada",label:"📤 Factura enviada",color:"#d97706",bg:"#fffbeb"};
+    return{status:"sin_factura",label:"📋 Pendiente de facturación",color:"#8a857c",bg:"#f8f7f5"};
+  };
+
+  const classified=visPs.map(p=>({...p,pagoStatus:classify(p)}));
+  const pagados=classified.filter(p=>p.pagoStatus.status==="pagado");
+  const pendientes=classified.filter(p=>p.pagoStatus.status!=="pagado");
+  const totalPend=pendientes.length;
+  const totalPag=pagados.length;
+
+  const [filt,setFilt]=useState("pendientes");
+  const shown=filt==="pagados"?pagados:filt==="pendientes"?pendientes:classified;
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:13,marginBottom:20,flexWrap:"wrap"}}>
+        <Stat label="Pendientes de pago" value={totalPend} icon="⏳" accent="#dc2626" sub={totalPend>0?"Acción requerida":""}/>
+        <Stat label="Pagados" value={totalPag} icon="✅" accent="#16a34a"/>
+      </div>
+
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        <select style={{padding:"8px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"#fff",fontSize:13,fontFamily:"inherit",cursor:"pointer"}} value={filt} onChange={e=>setFilt(e.target.value)}>
+          <option value="pendientes">Pendientes</option>
+          <option value="pagados">Pagados</option>
+          <option value="todos">Todos</option>
+        </select>
+        <span style={{fontSize:13,color:"#8a857c"}}>{shown.length} proyecto{shown.length!==1?"s":""}</span>
+      </div>
+
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",overflow:"hidden"}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 1fr auto",padding:"10px 17px",borderBottom:"1px solid #e8e5df",fontSize:11,fontWeight:700,color:"#8a857c",textTransform:"uppercase",letterSpacing:"0.05em"}}>
+          <span>Proyecto / Cliente</span>{role==="alonso"&&<span>Notaría</span>}<span>Tipo pago</span><span>Estado</span>
+        </div>
+        {!shown.length&&<div style={{padding:36,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin proyectos</div>}
+        {shown.map(p=>(
+          <div key={p.id} onClick={()=>onSelect(p.id)} style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 1fr auto",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center"}} onMouseEnter={ev=>ev.currentTarget.style.background="#f8f7f5"} onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}>
+            <div><div style={{fontSize:14,fontWeight:600}}>{displayName(p)}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliente}</div></div>
+            {role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{notarias.find(n=>n.id===p.notariaId)?.name||"—"}</div>}
+            <div style={{fontSize:12}}>{p.pagoEfectivo?"Efectivo":"Factura"}</div>
+            <div><Bg bg={p.pagoStatus.bg} color={p.pagoStatus.color}>{p.pagoStatus.label}</Bg></div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -2231,6 +2300,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("entregablesListos"in upd)d.entregables_listos=upd.entregablesListos;
     if("entregablesListosAt"in upd)d.entregables_listos_at=upd.entregablesListosAt;
     if("entregablesComentarios"in upd)d.entregables_comentarios=upd.entregablesComentarios;
+    if("modificaciones"in upd)d.modificaciones=upd.modificaciones;
     await db.updateProject(id,d);
   };
 
@@ -2630,7 +2700,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
           <button onClick={onLogout} style={{padding:"7px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"transparent",color:"#8a857c",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
         </div>
         <div style={{display:"flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
-          {tab("dashboard","Panel")}{tab("proyectos","Proyectos")}{tab("cobranza","💰 Cobranza")}{tab("calendario_p","Calendario")}{tab("efectividad","Efectividad")}{tab("metricas","Métricas")}{tab("dias","Días inhábiles")}
+          {tab("dashboard","Panel")}{tab("proyectos","Proyectos")}{tab("cobranza","💰 Cobranza")}{tab("pagos_not","💳 Pagos notaría")}{tab("calendario_p","Calendario")}{tab("efectividad","Efectividad")}{tab("metricas","Métricas")}{tab("dias","Días inhábiles")}
           {role==="alonso"&&tab("notarias","Notarías")}
           <Bell alerts={alerts} role={role} nid={nid}/>
           {role==="alonso"&&<Bt onClick={()=>{setShowForm(true);setVista("proyectos");}} style={{marginLeft:5,fontSize:12,padding:"7px 14px"}}>+ Nuevo</Bt>}
@@ -2724,6 +2794,58 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
+
+              {/* Modificaciones post-entrega (solo Alonso, solo proyectos completados o con modificaciones previas) */}
+              {role==="alonso"&&(sel.finished||(sel.modificaciones||[]).length>0)&&(()=>{
+                const mods=sel.modificaciones||[];
+                const pendientes=mods.filter(m=>!m.resuelta);
+                return(
+                  <div style={{marginTop:18,padding:18,borderRadius:14,background:"#fff",border:"1px solid #e8e5df"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                      <div>
+                        <div style={{fontSize:14,fontWeight:700}}>📝 Modificaciones post-entrega ({mods.length})</div>
+                        {pendientes.length>0&&<div style={{fontSize:11,color:"#dc2626",fontWeight:600,marginTop:2}}>⚠ {pendientes.length} pendiente{pendientes.length>1?"s":""}</div>}
+                      </div>
+                      <Bt onClick={()=>{
+                        const desc=prompt("¿Qué modificación se solicita?");
+                        if(!desc)return;
+                        const sol=prompt("¿Quién lo solicita? (Banco, SAT, autoridad, otro)");
+                        if(!sol)return;
+                        const newMod={id:`mod_${Date.now()}`,solicitante:sol,descripcion:desc,fecha:new Date().toISOString(),resuelta:false,resuelta_at:null,resuelta_por:""};
+                        save(sel.id,{modificaciones:[...mods,newMod]});
+                        setPs(prev=>prev.map(p=>p.id===sel.id?{...p,modificaciones:[...mods,newMod]}:p));
+                      }} style={{fontSize:11,padding:"6px 12px"}}>+ Solicitar modificación</Bt>
+                    </div>
+                    {!mods.length?<div style={{fontSize:12,color:"#8a857c",textAlign:"center",padding:14}}>Sin modificaciones solicitadas</div>:
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {[...mods].reverse().map((m,i)=>(
+                          <div key={m.id||i} style={{padding:"12px 14px",borderRadius:10,background:m.resuelta?"#f0fdf4":"#fef2f2",border:`1px solid ${m.resuelta?"#16a34a30":"#dc262630"}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:13,fontWeight:600}}>{m.descripcion}</div>
+                                <div style={{fontSize:11,color:"#8a857c",marginTop:3}}>Solicitado por: {m.solicitante} — {fmt(m.fecha.split("T")[0])}</div>
+                                {m.resuelta&&<div style={{fontSize:11,color:"#16a34a",fontWeight:600,marginTop:3}}>✓ Resuelta por {m.resuelta_por} — {fmt(m.resuelta_at.split("T")[0])}</div>}
+                              </div>
+                              {!m.resuelta?
+                                <Bt onClick={()=>{
+                                  const updated=mods.map(x=>x.id===m.id?{...x,resuelta:true,resuelta_at:new Date().toISOString(),resuelta_por:"Alonso"}:x);
+                                  save(sel.id,{modificaciones:updated});
+                                  setPs(prev=>prev.map(p=>p.id===sel.id?{...p,modificaciones:updated}:p));
+                                }} style={{fontSize:11,padding:"6px 12px"}}>✓ Marcar resuelta</Bt>:
+                                <Bt v="w" onClick={()=>{
+                                  const updated=mods.map(x=>x.id===m.id?{...x,resuelta:false,resuelta_at:null,resuelta_por:""}:x);
+                                  save(sel.id,{modificaciones:updated});
+                                  setPs(prev=>prev.map(p=>p.id===sel.id?{...p,modificaciones:updated}:p));
+                                }} style={{fontSize:11,padding:"5px 8px"}}>↩</Bt>
+                              }
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    }
+                  </div>
+                );
+              })()}
             </div>
           )}
           <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
@@ -2747,6 +2869,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
         </>}
 
         {vista==="cobranza"&&<CobranzaPanel ps={baseVisiblePs} notarias={notarias} filtNot={filtNot} onSelect={(id)=>{setSelId(id);setVista("proyectos");}}/>}
+        {vista==="pagos_not"&&<PagosNotariaPanel ps={baseVisiblePs} notarias={notarias} filtNot={filtNot} role={role} nid={nid} onSelect={(id)=>{setSelId(id);setVista("proyectos");}}/>}
         {vista==="calendario_p"&&<CalView ps={baseVisiblePs} inh={inh} inhFor={inhFor} onSelect={(id)=>{setSelId(id);setVista("proyectos");}}/>}
         {vista==="efectividad"&&<EffPanel ps={ps} inh={inh} inhFor={inhFor} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
         {vista==="metricas"&&<MetricsPanel ps={ps} notarias={notarias} filtNot={role==="notaria"?nid:filtNot}/>}
