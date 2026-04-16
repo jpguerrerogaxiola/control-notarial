@@ -315,19 +315,20 @@ function mkPreEtapas(){
 
 function getEntregablesTemplate(tipo){
   if(tipo==="sin_registro")return[
-    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
-    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null}
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true},
+    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true}
   ];
   if(tipo==="comercio")return[
-    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
-    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null},
-    {id:"boleta",label:"Boleta registral",done:false,done_at:null,recogido:false,recogido_at:null}
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true},
+    {id:"testimonio_boleta",label:"Testimonio con boleta registral",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true}
   ];
   // propiedad y personas_juridicas
   return[
-    {id:"ingreso_sol",label:"Ingreso solicitud",done:false,done_at:null,recogido:false,recogido_at:null},
-    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
-    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null}
+    {id:"ingreso_sol",label:"Ingreso solicitud",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true},
+    {id:"comp_ingreso",label:"Comprobante ingreso solicitud",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true},
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null,estricto:true},
+    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null,estricto:false,estimado_dias:14},
+    {id:"boleta_insc",label:"Boleta de inscripción",done:false,done_at:null,recogido:false,recogido_at:null,estricto:false,estimado_dias:14}
   ];
 }
 
@@ -1000,13 +1001,26 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
               <div style={{marginLeft:48,marginRight:4,marginTop:6,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
                 <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>📦 Detalle de entregables</div>
                 <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
-                  {det.map((ent,idx)=>(
-                    <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:8,background:ent.recogido?"#f0fdf4":ent.done?"#eff6ff":"#f8f7f5",border:`1px solid ${ent.recogido?"#16a34a30":ent.done?"#2563eb30":"transparent"}`}}>
+                  {det.map((ent,idx)=>{
+                    // Compute estimated date for non-strict items (2 weeks from when ingreso_sol is marked done)
+                    let estimadoDate=null;
+                    if(!ent.estricto&&ent.estimado_dias){
+                      const ingreso=det.find(x=>x.id==="ingreso_sol");
+                      if(ingreso?.done_at){
+                        const d=new Date(ingreso.done_at);d.setDate(d.getDate()+ent.estimado_dias);
+                        estimadoDate=d.toISOString().split("T")[0];
+                      }
+                    }
+                    const isOverdue=estimadoDate&&!ent.done&&td()>estimadoDate;
+                    const daysOver=isOverdue?Math.floor((Date.now()-new Date(estimadoDate+"T12:00:00").getTime())/(1000*60*60*24)):0;
+                    return(
+                    <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:8,background:ent.recogido?"#f0fdf4":ent.done?"#eff6ff":isOverdue?"#fffbeb":"#f8f7f5",border:`1px solid ${ent.recogido?"#16a34a30":ent.done?"#2563eb30":isOverdue?"#d9770630":"transparent"}`}}>
                       <div style={{flex:1}}>
-                        <div style={{fontSize:13,fontWeight:600}}>{idx+1}. {ent.label}</div>
+                        <div style={{fontSize:13,fontWeight:600}}>{idx+1}. {ent.label}{!ent.estricto&&<span style={{fontSize:10,color:"#7c3aed",marginLeft:6}}>estimado</span>}</div>
                         <div style={{display:"flex",gap:10,marginTop:4,fontSize:11,flexWrap:"wrap"}}>
                           {ent.done?<span style={{color:"#2563eb",fontWeight:600}}>✓ Listo en notaría{ent.done_at?` — ${fmt(ent.done_at.split("T")[0])}`:""}</span>:<span style={{color:"#8a857c"}}>Pendiente de notaría</span>}
                           {ent.done&&(ent.recogido?<span style={{color:"#16a34a",fontWeight:600}}>✓ Recogido{ent.recogido_at?` — ${fmt(ent.recogido_at.split("T")[0])}`:""}</span>:<span style={{color:"#d97706",fontWeight:600}}>⏳ Sin recoger por Alonso</span>)}
+                          {!ent.done&&estimadoDate&&<span style={{color:isOverdue?"#d97706":"#8a857c"}}>Estimado: {fmt(estimadoDate)}{isOverdue?` — ⚠ ${daysOver} día${daysOver>1?"s":""} sin entregarse, dar seguimiento`:""}</span>}
                         </div>
                       </div>
                       <div style={{display:"flex",gap:5,flexShrink:0}}>
@@ -1016,12 +1030,18 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                         {ent.done&&!ent.recogido&&role==="alonso"&&(
                           <Bt onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],recogido:true,recogido_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>📥 Recogido</Bt>
                         )}
+                        {/* Notaría puede deshacer "listo" si Alonso no ha recogido */}
+                        {ent.done&&!ent.recogido&&role==="notaria"&&(
+                          <Bt v="w" onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],done:false,done_at:null};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 8px"}}>↩</Bt>
+                        )}
+                        {/* Alonso puede deshacer cualquier estado */}
                         {role==="alonso"&&(ent.done||ent.recogido)&&(
                           <Bt v="w" onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],done:ent.recogido?ent.done:false,done_at:ent.recogido?ent.done_at:null,recogido:false,recogido_at:null};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 8px"}}>↩</Bt>
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {/* Resumen */}
                 <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`,marginBottom:10}}>
