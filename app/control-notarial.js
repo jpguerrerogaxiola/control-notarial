@@ -746,7 +746,7 @@ function PrePipe({p, role, onAdvance, onUndo, onEditDate, onUpdateChecklist, onU
 // ═══════════════════════════════════════════════════════════════
 // PIPELINE NORMAL (con notaría)
 // ═══════════════════════════════════════════════════════════════
-function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo,onAddFile,onRemoveFile,onNotifyNotaria}){
+function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClearObs,onSetEscritura,onTogglePagoEfectivo,onAddFile,onRemoveFile,onNotifyNotaria,onUpdateEntregables}){
   const etapas=getEt(p.tipo),envDone=p.etapas.envio?.done;
   // Etapas ocultas para notaría
   const HIDDEN_FOR_NOTARIA = new Set(["proyeccion","envio_cliente","envio_cc","envio_test"]);
@@ -971,6 +971,62 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
             {isEnvio&&(
               <div style={{marginLeft:48,marginRight:4,marginTop:6}}>
                 <ExpedienteView p={p} role={role} onAddFile={onAddFile} onRemoveFile={onRemoveFile} onNotifyNotaria={onNotifyNotaria}/>
+              </div>
+            )}
+
+            {/* Entregables desglosados inside entregables step */}
+            {e.id==="entregables"&&(isAct||d?.done)&&(
+              <div style={{marginLeft:48,marginRight:4,marginTop:6,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
+                <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>📦 Detalle de entregables</div>
+                <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:10}}>
+                  {(p.entregablesDetalle||[]).map((ent,idx)=>(
+                    <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:8,background:ent.done?"#f0fdf4":"#f8f7f5"}}>
+                      <input type="checkbox" checked={ent.done||false} onChange={()=>{
+                        const nd=[...(p.entregablesDetalle||[])];
+                        nd[idx]={...nd[idx],done:!nd[idx].done,done_at:!nd[idx].done?new Date().toISOString():null};
+                        onUpdateEntregables(p.id,{entregablesDetalle:nd});
+                      }} style={{width:18,height:18,cursor:"pointer"}}/>
+                      <span style={{fontSize:13,fontWeight:500,textDecoration:ent.done?"line-through":"none",color:ent.done?"#16a34a":"#1a1714",flex:1}}>{ent.label}</span>
+                      {ent.done&&ent.done_at&&<span style={{fontSize:10,color:"#8a857c"}}>✓ {fmt(ent.done_at.split("T")[0])}</span>}
+                    </div>
+                  ))}
+                </div>
+                {/* Listos para recoger */}
+                <div style={{padding:12,borderRadius:8,background:p.entregablesListos?"#f0fdf4":"#fffbeb",border:`1px solid ${p.entregablesListos?"#16a34a":"#fde68a"}40`,marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700,color:p.entregablesListos?"#16a34a":"#92400e"}}>
+                        {p.entregablesListos?"📦 Entregables listos para recoger en notaría":"📦 Pendiente — no están listos para recoger"}
+                      </div>
+                      {p.entregablesListos&&p.entregablesListosAt&&<div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Marcado el {fmt(p.entregablesListosAt.split("T")[0])}</div>}
+                    </div>
+                    {(role==="notaria"||role==="alonso")&&(
+                      !p.entregablesListos?
+                        <Bt onClick={()=>onUpdateEntregables(p.id,{entregablesListos:true,entregablesListosAt:new Date().toISOString()})} style={{fontSize:11,padding:"6px 12px"}}>📦 Marcar listos para recoger</Bt>:
+                        (role==="alonso"?<Bt v="w" onClick={()=>onUpdateEntregables(p.id,{entregablesListos:false,entregablesListosAt:null})} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>:null)
+                    )}
+                  </div>
+                </div>
+                {/* Comentarios de entregables */}
+                {(()=>{
+                  const comms=p.entregablesComentarios||[];
+                  return(
+                    <div>
+                      <div style={{fontSize:11,fontWeight:700,color:"#8a857c",marginBottom:5}}>Comentarios ({comms.length})</div>
+                      {comms.length>0&&<div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:8,maxHeight:150,overflowY:"auto"}}>
+                        {[...comms].reverse().map((c,i)=>(
+                          <div key={i} style={{padding:"6px 10px",borderRadius:6,background:"#f8f7f5",fontSize:11}}>
+                            <span style={{fontWeight:700}}>{c.autor}</span> <span style={{color:"#8a857c"}}>{new Date(c.fecha).toLocaleString("es-MX",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                            <div style={{marginTop:2}}>{c.texto}</div>
+                          </div>
+                        ))}
+                      </div>}
+                      <div style={{display:"flex",gap:6}}>
+                        <input id={`entcom_${p.id}`} style={{...iS,padding:"6px 10px",fontSize:12}} placeholder="Agregar comentario..." onKeyDown={ev=>{if(ev.key==="Enter"&&ev.target.value.trim()){onUpdateEntregables(p.id,{entregablesComentarios:[...comms,{autor:role==="alonso"?"Alonso":"Notaría",fecha:new Date().toISOString(),texto:ev.target.value.trim()}]});ev.target.value="";}}}/>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -1709,7 +1765,7 @@ function SFGGView({ps, notarias, onUpdate, onChangePassword, session}){
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
             <div>
-              <div style={{fontSize:18,fontWeight:700}}>{sel.name}</div>
+              <div style={{fontSize:18,fontWeight:700}}>{displayName(sel)}</div>
               <div style={{fontSize:14,color:"#8a857c",marginTop:3}}>Cliente: {sel.cliente}</div>
               <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                 <Bg>{TIPO_L[sel.tipo]||sel.tipo}</Bg>
@@ -1805,7 +1861,7 @@ function SFGGView({ps, notarias, onUpdate, onChangePassword, session}){
         {!filtered.length&&<div style={{padding:36,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin comisiones</div>}
         {filtered.map(p=>(
           <div key={p.id} onClick={()=>setSelId(selId===p.id?null:p.id)} style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 1fr 100px 100px 100px",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}>
-            <div><div style={{fontSize:14,fontWeight:600}}>{p.name}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliente}</div></div>
+            <div><div style={{fontSize:14,fontWeight:600}}{displayName(p)}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliente}</div></div>
             <div style={{fontSize:12,color:"#8a857c"}}>{notarias.find(n=>n.id===p.notariaId)?.name||"—"}</div>
             <div style={{fontSize:14,fontWeight:700,color:"#2563eb"}}>{fmtMoney((p.sfggMonto||0)*1.16)}</div>
             <div><Bg bg={p.sfggModalidad==="efectivo"?"#fef3c7":"#eff6ff"} color={p.sfggModalidad==="efectivo"?"#92400e":"#2563eb"}>{p.sfggModalidad==="efectivo"?"Efectivo":"Factura"}</Bg></div>
@@ -1854,7 +1910,7 @@ function AdminView({ps, onMarkPagado, onAddNotaCobranza, onSetFacturaNum, sessio
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
             <div>
-              <div style={{fontSize:18,fontWeight:700}}>{sel.name}</div>
+              <div style={{fontSize:18,fontWeight:700}}>{displayName(sel)}</div>
               <div style={{fontSize:14,color:"#8a857c",marginTop:3}}>Cliente: {sel.cliente}</div>
               <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                 <Bg>{ESCENARIOS[sel.escenario]||sel.escenario}</Bg>
@@ -1933,7 +1989,7 @@ function AdminView({ps, onMarkPagado, onAddNotaCobranza, onSetFacturaNum, sessio
         {!filtered.length&&<div style={{padding:36,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin proyectos</div>}
         {filtered.map(p=>(
           <div key={p.id} onClick={()=>setSelId(selId===p.id?null:p.id)} style={{display:"grid",gridTemplateColumns:"2fr 1.5fr 1fr 1fr 100px",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}>
-            <div><div style={{fontSize:14,fontWeight:600}}>{p.name}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliPagoTipo==="total"?"Factura total":"Anticipo"}</div></div>
+            <div><div style={{fontSize:14,fontWeight:600}}{displayName(p)}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliPagoTipo==="total"?"Factura total":"Anticipo"}</div></div>
             <div style={{fontSize:13}}>{p.cliente}</div>
             <div style={{fontSize:14,fontWeight:700,color:"#2563eb"}}>${(p.cliFacturaNeto||0).toLocaleString("es-MX",{minimumFractionDigits:2})}</div>
             <div style={{fontSize:12,color:"#8a857c"}}>{p.facturaSolicitadaAt?fmt(p.facturaSolicitadaAt.split("T")[0]):"—"}</div>
@@ -2312,6 +2368,14 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     try{localStorage.setItem("cn_session",JSON.stringify(updated));}catch(e){}
   },[systemUsers,session,setSystemUsers]);
 
+  const updateEntregables=useCallback(async(pid,upd)=>{
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      save(pid,upd);
+      return{...p,...upd};
+    }));
+  },[]);
+
   // Mark factura solicitada (when user clicks email button)
   const markFacturaSolicitada=useCallback(async(pid)=>{
     const now=new Date().toISOString();
@@ -2542,7 +2606,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
                 const et=isPre?null:getEt(p.tipo);
                 const e=isPre?PRE_ETAPAS[p.preStep]:et[p.step];
                 const info=isPre?{c:"#7c3aed",l:"Previo"}:getSt(p,p.step,inhFor(p.notariaId));
-                return <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer"}} onClick={()=>{setSelId(p.id);setVista("proyectos");}} onMouseEnter={ev=>ev.currentTarget.style.background="#f8f7f5"} onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}><div><div style={{fontSize:14,fontWeight:600}}>{p.name}{p.cliente&&<span style={{fontSize:12,color:"#8a857c",marginLeft:6}}>— {p.cliente}</span>}</div><div style={{fontSize:12,color:"#8a857c"}}>{e?.label} — {TIPO_L[p.tipo]}{role==="alonso"&&getNotName(p.notariaId)?` — ${getNotName(p.notariaId)}`:""}</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}>{info.v&&<span style={{fontSize:12,color:info.c,fontWeight:600}}>Vence {fmt(info.v)}</span>}<Bg bg={info.c+"15"} color={info.c}>{info.l}</Bg></div></div>;
+                return <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer"}} onClick={()=>{setSelId(p.id);setVista("proyectos");}} onMouseEnter={ev=>ev.currentTarget.style.background="#f8f7f5"} onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}><div><div style={{fontSize:14,fontWeight:600}}{displayName(p)}{p.cliente&&<span style={{fontSize:12,color:"#8a857c",marginLeft:6}}>— {p.cliente}</span>}</div><div style={{fontSize:12,color:"#8a857c"}}>{e?.label} — {TIPO_L[p.tipo]}{role==="alonso"&&getNotName(p.notariaId)?` — ${getNotName(p.notariaId)}`:""}</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}>{info.v&&<span style={{fontSize:12,color:info.c,fontWeight:600}}>Vence {fmt(info.v)}</span>}<Bg bg={info.c+"15"} color={info.c}>{info.l}</Bg></div></div>;
               })}
           </div>
         </>}
@@ -2553,7 +2617,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
             <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:20}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
                 <div>
-                  <div style={{fontSize:18,fontWeight:700}}>{sel.name}</div>
+                  <div style={{fontSize:18,fontWeight:700}}>{displayName(sel)}</div>
                   {sel.cliente&&<div style={{fontSize:13,color:"#8a857c",marginTop:3}}>Cliente: {sel.cliente}</div>}
                   <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
                     <Bg>{TIPO_L[sel.tipo]}</Bg>
@@ -2584,7 +2648,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               {role==="alonso"&&<PrePipe p={sel} role={role} onAdvance={advancePre} onUndo={undoPre} onEditDate={editDate} onUpdateChecklist={updateChecklist} onUpdatePagoCliente={updatePagoCliente} onSetObs={setObs} onClearObs={clearObs} onMarkFacturaSolicitada={markFacturaSolicitada} onMarkClientePagado={markClientePagado} onUndoClientePagado={undoClientePagado} onUploadCSF={uploadCSFSociedad} onRemoveCSF={removeCSFSociedad}/>}
 
               {/* Main pipeline */}
-              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria}/>}
+              {sel.preDone&&<Pipe p={sel} inh={inhFor(sel.notariaId)} role={role} onDone={advance} onUndo={undo} onFact={markFact} onPago={markPago} onEditDate={editDate} onSetObs={setObs} onClearObs={clearObs} onSetEscritura={setEscritura} onTogglePagoEfectivo={togglePagoEfectivo} onAddFile={addFile} onRemoveFile={removeFile} onNotifyNotaria={notifyNotaria} onUpdateEntregables={updateEntregables}/>}
               {role==="alonso"&&sel.preDone===false&&<div style={{marginTop:14,padding:14,borderRadius:10,background:"#f8f7f5",fontSize:12,color:"#8a857c",textAlign:"center"}}>El flujo con notaría comenzará cuando se complete el flujo previo.</div>}
 
               <NotasPanel notas={sel.notas} onAdd={(n)=>addNota(sel.id,n)} session={session}/>
@@ -2605,7 +2669,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               const et=isPre?null:getEt(p.tipo);
               const e=isPre?PRE_ETAPAS[p.preStep]:(p.step<et.length?et[p.step]:null);
               const info=isPre?{c:"#7c3aed",l:"Previo"}:(e?getSt(p,p.step,inhFor(p.notariaId)):{c:"#16a34a",l:"✓"});
-              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}>{p.name}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!p.finished?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
+              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}{displayName(p)}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!p.finished?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
             })}
           </div>
         </>}
