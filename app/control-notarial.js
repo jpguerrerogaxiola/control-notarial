@@ -1044,11 +1044,40 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                   })}
                 </div>
                 {/* Resumen */}
-                <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`,marginBottom:10}}>
-                  <div style={{fontSize:12,fontWeight:700,color:allRecogido?"#16a34a":allDone?"#2563eb":"#8a857c"}}>
-                    {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos en notaría — pendiente recoger":someDone?"📦 Algunos entregables listos":"⏳ Pendiente de entregables"}
-                  </div>
-                </div>
+                {(()=>{
+                  const strictItems=det.filter(x=>x.estricto);
+                  const estimadoItems=det.filter(x=>!x.estricto);
+                  const allStrictDone=strictItems.length>0&&strictItems.every(x=>x.done);
+                  const lastStrictDate=allStrictDone?strictItems.reduce((max,x)=>x.done_at&&x.done_at>max?x.done_at:max,""):null;
+                  return(
+                    <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
+                      {/* Indicador de cumplimiento de notaría (solo los estrictos) */}
+                      {strictItems.length>0&&(
+                        <div style={{padding:10,borderRadius:8,background:allStrictDone?"#f0fdf4":"#f8f7f5",border:`1px solid ${allStrictDone?"#16a34a30":"#e8e5df"}`}}>
+                          <div style={{fontSize:12,fontWeight:700,color:allStrictDone?"#16a34a":"#8a857c"}}>
+                            {allStrictDone?`✓ Notaría cumplió con sus entregables${lastStrictDate?` — ${fmt(lastStrictDate.split("T")[0])}`:""}`:
+                              `⏳ Notaría pendiente: ${strictItems.filter(x=>!x.done).map(x=>x.label).join(", ")}`}
+                          </div>
+                        </div>
+                      )}
+                      {/* Estado general incluyendo estimados */}
+                      {estimadoItems.length>0&&(
+                        <div style={{padding:10,borderRadius:8,background:allDone?"#f0fdf4":allStrictDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allDone?"#16a34a30":allStrictDone?"#2563eb30":"#e8e5df"}`}}>
+                          <div style={{fontSize:12,fontWeight:700,color:allDone?"#16a34a":allStrictDone?"#2563eb":"#8a857c"}}>
+                            {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos — pendiente recoger":allStrictDone?`⏳ Pendiente: ${estimadoItems.filter(x=>!x.done).map(x=>x.label).join(", ")}`:"⏳ Pendiente de entregables"}
+                          </div>
+                        </div>
+                      )}
+                      {estimadoItems.length===0&&(
+                        <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`}}>
+                          <div style={{fontSize:12,fontWeight:700,color:allRecogido?"#16a34a":allDone?"#2563eb":"#8a857c"}}>
+                            {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos en notaría — pendiente recoger":someDone?"📦 Algunos entregables listos":"⏳ Pendiente de entregables"}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {/* Comentarios */}
                 {(()=>{
                   const comms=p.entregablesComentarios||[];
