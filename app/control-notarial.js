@@ -999,9 +999,22 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 
             {/* Entregables desglosados inside entregables step */}
             {e.id==="entregables"&&(isAct||d?.done)&&(()=>{
-              // Auto-generate entregables if empty or missing estricto field (for projects created before v4.4)
+              // Auto-generate entregables if empty. If items exist but missing estricto field,
+              // merge the new template fields into existing items preserving their done/recogido state
               let det=p.entregablesDetalle||[];
-              if(!det.length||(det.length>0&&det[0].estricto===undefined)){det=getEntregablesTemplate(p.tipo);onUpdateEntregables(p.id,{entregablesDetalle:det});}
+              if(!det.length){
+                det=getEntregablesTemplate(p.tipo);
+                onUpdateEntregables(p.id,{entregablesDetalle:det});
+              } else if(det.length>0&&det[0].estricto===undefined){
+                // Merge: get template, apply existing done/recogido states by matching id
+                const tmpl=getEntregablesTemplate(p.tipo);
+                det=tmpl.map(t=>{
+                  const existing=det.find(x=>x.id===t.id);
+                  if(existing)return{...t,done:existing.done||false,done_at:existing.done_at||null,recogido:existing.recogido||false,recogido_at:existing.recogido_at||null};
+                  return t;
+                });
+                onUpdateEntregables(p.id,{entregablesDetalle:det});
+              }
               const allDone=det.length>0&&det.every(x=>x.done);
               const allRecogido=det.length>0&&det.every(x=>x.recogido);
               const someDone=det.some(x=>x.done);
