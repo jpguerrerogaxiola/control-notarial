@@ -989,57 +989,55 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
             )}
 
             {/* Entregables desglosados inside entregables step */}
-            {e.id==="entregables"&&(isAct||d?.done)&&(
+            {e.id==="entregables"&&(isAct||d?.done)&&(()=>{
+              // Auto-generate entregables if empty (for projects created before v4)
+              let det=p.entregablesDetalle||[];
+              if(!det.length){det=getEntregablesTemplate(p.tipo);onUpdateEntregables(p.id,{entregablesDetalle:det});}
+              const allDone=det.length>0&&det.every(x=>x.done);
+              const allRecogido=det.length>0&&det.every(x=>x.recogido);
+              const someDone=det.some(x=>x.done);
+              return(
               <div style={{marginLeft:48,marginRight:4,marginTop:6,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
                 <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>📦 Detalle de entregables</div>
                 <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
-                  {(p.entregablesDetalle||[]).map((ent,idx)=>(
+                  {det.map((ent,idx)=>(
                     <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:8,background:ent.recogido?"#f0fdf4":ent.done?"#eff6ff":"#f8f7f5",border:`1px solid ${ent.recogido?"#16a34a30":ent.done?"#2563eb30":"transparent"}`}}>
                       <div style={{flex:1}}>
-                        <div style={{fontSize:13,fontWeight:600}}>{ent.label}</div>
+                        <div style={{fontSize:13,fontWeight:600}}>{idx+1}. {ent.label}</div>
                         <div style={{display:"flex",gap:10,marginTop:4,fontSize:11,flexWrap:"wrap"}}>
                           {ent.done?<span style={{color:"#2563eb",fontWeight:600}}>✓ Listo en notaría{ent.done_at?` — ${fmt(ent.done_at.split("T")[0])}`:""}</span>:<span style={{color:"#8a857c"}}>Pendiente de notaría</span>}
                           {ent.done&&(ent.recogido?<span style={{color:"#16a34a",fontWeight:600}}>✓ Recogido{ent.recogido_at?` — ${fmt(ent.recogido_at.split("T")[0])}`:""}</span>:<span style={{color:"#d97706",fontWeight:600}}>⏳ Sin recoger por Alonso</span>)}
                         </div>
                       </div>
                       <div style={{display:"flex",gap:5,flexShrink:0}}>
-                        {/* Notaría marca listo */}
                         {!ent.done&&(role==="notaria"||role==="alonso")&&(
-                          <Bt v="n" onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],done:true,done_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>✓ Listo</Bt>
+                          <Bt v="n" onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],done:true,done_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>✓ Listo</Bt>
                         )}
                         {ent.done&&!ent.recogido&&role==="alonso"&&(
-                          <Bt onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],recogido:true,recogido_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>📥 Recogido</Bt>
+                          <Bt onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],recogido:true,recogido_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>📥 Recogido</Bt>
                         )}
-                        {/* Alonso can undo any state */}
                         {role==="alonso"&&(ent.done||ent.recogido)&&(
-                          <Bt v="w" onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],done:ent.recogido?ent.done:false,done_at:ent.recogido?ent.done_at:null,recogido:false,recogido_at:null};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 8px"}}>↩</Bt>
+                          <Bt v="w" onClick={()=>{const nd=[...det];nd[idx]={...nd[idx],done:ent.recogido?ent.done:false,done_at:ent.recogido?ent.done_at:null,recogido:false,recogido_at:null};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 8px"}}>↩</Bt>
                         )}
                       </div>
                     </div>
                   ))}
                 </div>
-                {/* Listos para recoger - resumen */}
-                {(()=>{
-                  const allDone=(p.entregablesDetalle||[]).every(e=>e.done);
-                  const allRecogido=(p.entregablesDetalle||[]).every(e=>e.recogido);
-                  const someDone=(p.entregablesDetalle||[]).some(e=>e.done);
-                  return(
-                    <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`,marginBottom:10}}>
-                      <div style={{fontSize:12,fontWeight:700,color:allRecogido?"#16a34a":allDone?"#2563eb":"#8a857c"}}>
-                        {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos en notaría — pendiente recoger":someDone?"📦 Algunos entregables listos":"⏳ Pendiente de entregables"}
-                      </div>
-                    </div>
-                  );
-                })()}
-                {/* Comentarios de entregables */}
+                {/* Resumen */}
+                <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`,marginBottom:10}}>
+                  <div style={{fontSize:12,fontWeight:700,color:allRecogido?"#16a34a":allDone?"#2563eb":"#8a857c"}}>
+                    {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos en notaría — pendiente recoger":someDone?"📦 Algunos entregables listos":"⏳ Pendiente de entregables"}
+                  </div>
+                </div>
+                {/* Comentarios */}
                 {(()=>{
                   const comms=p.entregablesComentarios||[];
                   return(
                     <div>
                       <div style={{fontSize:11,fontWeight:700,color:"#8a857c",marginBottom:5}}>Comentarios ({comms.length})</div>
                       {comms.length>0&&<div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:8,maxHeight:150,overflowY:"auto"}}>
-                        {[...comms].reverse().map((c,i)=>(
-                          <div key={i} style={{padding:"6px 10px",borderRadius:6,background:"#f8f7f5",fontSize:11}}>
+                        {[...comms].reverse().map((c,ci)=>(
+                          <div key={ci} style={{padding:"6px 10px",borderRadius:6,background:"#f8f7f5",fontSize:11}}>
                             <span style={{fontWeight:700}}>{c.autor}</span> <span style={{color:"#8a857c"}}>{new Date(c.fecha).toLocaleString("es-MX",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
                             <div style={{marginTop:2}}>{c.texto}</div>
                           </div>
@@ -1052,7 +1050,8 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                   );
                 })()}
               </div>
-            )}
+              );
+            })()}
 
             {i<etapas.length-1&&<div style={{marginLeft:30,height:6,borderLeft:`2px ${i<p.step?"solid":"dashed"} ${i<p.step?"#16a34a":"#e8e5df"}`}}/>}
           </div>
