@@ -127,7 +127,9 @@ function computeIdealDates(p, inh){
       continue;
     }
     const idealStart = prevIdealVenc;
-    const idealVenc = step.plazo > 0 ? addBD(idealStart, step.plazo, inh) : idealStart;
+    // Solo notaría cuenta en el ideal. Alonso = 0 días (cumple al instante en el ideal)
+    const plazoIdeal = step.owner==="notaria" ? step.plazo : 0;
+    const idealVenc = plazoIdeal > 0 ? addBD(idealStart, plazoIdeal, inh) : idealStart;
     result[step.id] = { idealStart, idealVenc };
     prevIdealVenc = idealVenc;
   }
@@ -172,6 +174,7 @@ function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","A
 function fmtLong(d){ if(!d)return""; const p=d.split("-"),m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]; return `${parseInt(p[2])} de ${m[parseInt(p[1])-1]} de ${p[0]}`; }
 // Normalize responsable name for filtering (trim + lowercase)
 function normResp(s){ return (s||"").trim().toLowerCase(); }
+function displayName(p){ return p.numEscritura ? `${p.numEscritura} — ${p.name}` : p.name; }
 
 // ═══════════════════════════════════════════════════════════════
 // CHECKLIST TEMPLATES
@@ -305,6 +308,12 @@ function mkPreEtapas(){
   return st;
 }
 
+function getEntregablesTemplate(tipo){
+  if(tipo==="sin_registro")return[{id:"copia_cert",label:"Copia certificada",done:false,done_at:null},{id:"testimonio",label:"Testimonio",done:false,done_at:null}];
+  if(tipo==="comercio")return[{id:"copia_cert",label:"Copia certificada",done:false,done_at:null},{id:"testimonio",label:"Testimonio",done:false,done_at:null},{id:"boleta",label:"Boleta registral",done:false,done_at:null}];
+  return[{id:"ingreso_sol",label:"Ingreso solicitud",done:false,done_at:null},{id:"comprobante",label:"Comprobante",done:false,done_at:null},{id:"copia_cert",label:"Copia certificada",done:false,done_at:null}];
+}
+
 function dbToApp(r){
   return{id:r.id,name:r.name,cliente:r.cliente||"",tipo:r.tipo,escenario:r.escenario||"acta_interno",
     step:r.step,created:r.created,fechaActo:r.fecha_acto,
@@ -320,7 +329,13 @@ function dbToApp(r){
     facturaSolicitada:r.factura_solicitada||false,facturaSolicitadaAt:r.factura_solicitada_at,
     facturaEmitidaNum:r.factura_emitida_num||"",facturaEmitidaAt:r.factura_emitida_at,
     clientePagado:r.cliente_pagado||false,clientePagadoAt:r.cliente_pagado_at,clientePagadoPor:r.cliente_pagado_por||"",
-    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[],expediente:r.expediente||[],csfSociedad:r.csf_sociedad||null};
+    notasCobranza:r.notas_cobranza||[],facturaLog:r.factura_log||[],expediente:r.expediente||[],csfSociedad:r.csf_sociedad||null,
+    sfggMonto:r.sfgg_monto||2000,sfggModalidad:r.sfgg_modalidad||"factura",
+    sfggFacturado:r.sfgg_facturado||false,sfggFacturadoAt:r.sfgg_facturado_at,sfggFacturaNum:r.sfgg_factura_num||"",
+    sfggCobrado:r.sfgg_cobrado||false,sfggCobradoAt:r.sfgg_cobrado_at,sfggNotas:r.sfgg_notas||[],
+    registroLugar:r.registro_lugar||"local",oficinaRegistral:r.oficina_registral||"",
+    entregablesDetalle:r.entregables_detalle||[],entregablesListos:r.entregables_listos||false,
+    entregablesListosAt:r.entregables_listos_at,entregablesComentarios:r.entregables_comentarios||[]};
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -901,7 +916,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                     {!editingEscritura?(
                       <>
                         <span style={{fontSize:13,fontWeight:600}}>{p.numEscritura||"— sin asignar —"}</span>
-                        {role==="alonso"&&<button onClick={()=>{setEditingEscritura(true);setEscVal(p.numEscritura||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>✏️ {p.numEscritura?"editar":"agregar"}</button>}
+                        {(role==="alonso"||role==="notaria")&&<button onClick={()=>{setEditingEscritura(true);setEscVal(p.numEscritura||"");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>✏️ {p.numEscritura?"editar":"agregar"}</button>}
                       </>
                     ):(
                       <>
@@ -931,7 +946,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                 {isFact&&p.factSent&&<Bg bg="#f0fdf4" color="#16a34a">✓ Factura {fmt(p.factDate)}</Bg>}
                 {canPago&&role==="alonso"&&<Bt v="p" onClick={()=>onPago(p.id)}>💰 Marcar pago</Bt>}
                 {isPago&&!p.factSent&&!p.pagoEfectivo&&<Bg bg="#f1f0ed" color="#8a857c">Requiere factura</Bg>}
-                {isPago&&p.factSent&&!p.pagoMarcado&&role==="notaria"&&<Bg bg="#fffbeb" color="#d97706">⏳ Esperando pago</Bg>}
+                {isPago&&p.factSent&&!p.pagoMarcado&&role==="notaria"&&<Bg bg="#fef2f2" color="#dc2626">⚠ Pendiente de pago — No han pagado</Bg>}
                 {isPago&&p.pagoMarcado&&<Bg bg="#f0fdf4" color="#16a34a">✓ Pagado {fmt(p.pagoDate)}</Bg>}
                 {canAct&&!isFact&&!isPago&&<Bt v={e.owner==="notaria"?"n":"p"} onClick={()=>onDone(p.id,e.id)}>Completar ✓</Bt>}
                 {/* Allow advancing entregables when incomplete */}
@@ -1583,9 +1598,10 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSyste
           <div style={{fontSize:16,fontWeight:700}}>🔐 Usuarios del sistema</div>
           <div style={{fontSize:12,color:"#8a857c",marginTop:2}}>Cambiar contraseñas de administración y otros usuarios especiales</div>
         </div>
-        {!systemUsers.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>No hay usuarios del sistema</div>:
+        {(()=>{const visibleSys=systemUsers.filter(s=>s.role!=="sfgg");return(
+        !visibleSys.length?<div style={{padding:20,textAlign:"center",color:"#8a857c",fontSize:13}}>No hay usuarios del sistema</div>:
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            {systemUsers.map(s=>(
+            {visibleSys.map(s=>(
               <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",borderRadius:10,background:"#f8f7f5",flexWrap:"wrap",gap:8}}>
                 <div><div style={{fontSize:14,fontWeight:600}}>{s.label}</div><div style={{fontSize:12,color:"#8a857c"}}>Usuario: {s.username} — Rol: {s.role}</div></div>
                 {editingSys===s.id?(
@@ -1600,7 +1616,7 @@ function NotAdmin({notarias,onCreate,onUpdate,onDelete,systemUsers,onUpdateSyste
               </div>
             ))}
           </div>
-        }
+        );})()}
       </div>
     </div>
   );
@@ -1624,6 +1640,187 @@ function Bell({alerts,role,nid}){
   );
 }
 function Cfm({msg,onYes,onNo}){return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}><div style={{background:"#fff",borderRadius:16,padding:30,maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}><div style={{fontSize:15,fontWeight:600,marginBottom:20,lineHeight:1.5}}>{msg}</div><div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><Bt v="g" onClick={onNo}>Cancelar</Bt><Bt v="d" onClick={onYes}>Confirmar</Bt></div></div></div>;}
+
+// ═══════════════════════════════════════════════════════════════
+// SFGG VIEW (perfil comisiones sfgg)
+// ═══════════════════════════════════════════════════════════════
+function SFGGView({ps, notarias, onUpdate, onChangePassword, session}){
+  const [selId, setSelId] = useState(null);
+  const [filtNot, setFiltNot] = useState("");
+  const [filt, setFilt] = useState("pendientes"); // pendientes | cobrados | todos
+  const [showPass, setShowPass] = useState(false);
+  const [newPass, setNewPass] = useState("");
+  const [passMsg, setPassMsg] = useState("");
+
+  // Solo proyectos que ya fueron pagados a la notaría (la comisión nace en ese momento)
+  const visiblePs = ps.filter(p => p.pagoMarcado === true);
+  const filteredByNot = filtNot ? visiblePs.filter(p => p.notariaId === filtNot) : visiblePs;
+  const filtered = filteredByNot.filter(p => {
+    if(filt==="pendientes") return !p.sfggCobrado;
+    if(filt==="cobrados") return p.sfggCobrado;
+    return true;
+  });
+  const sel = ps.find(p=>p.id===selId);
+
+  // Stats
+  const totalPend = filteredByNot.filter(p=>!p.sfggCobrado).length;
+  const totalCobr = filteredByNot.filter(p=>p.sfggCobrado).length;
+  const sumBruto = (arr) => arr.reduce((acc,p)=>acc+(p.sfggMonto||0),0);
+  const sumNeto = (arr) => arr.reduce((acc,p)=>acc+((p.sfggMonto||0)*1.16),0);
+  const pendBruto = sumBruto(filteredByNot.filter(p=>!p.sfggCobrado));
+  const pendNeto = sumNeto(filteredByNot.filter(p=>!p.sfggCobrado));
+  const cobrBruto = sumBruto(filteredByNot.filter(p=>p.sfggCobrado));
+  const cobrNeto = sumNeto(filteredByNot.filter(p=>p.sfggCobrado));
+  const pendFact = filteredByNot.filter(p=>p.sfggModalidad==="factura"&&!p.sfggFacturado).length;
+
+  const fmtMoney = (n) => `$${(n||0).toLocaleString("es-MX",{minimumFractionDigits:2})}`;
+
+  const savePass = async () => {
+    if(!newPass.trim()){setPassMsg("Ingresa una contraseña");return;}
+    await onChangePassword(newPass);
+    setPassMsg("✓ Contraseña actualizada");
+    setNewPass("");
+    setTimeout(()=>{setPassMsg("");setShowPass(false);},1800);
+  };
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:13,marginBottom:20,flexWrap:"wrap"}}>
+        <Stat label="Pendientes de cobro" value={totalPend} icon="⏳" accent="#d97706" sub={totalPend>0?fmtMoney(pendNeto):""}/>
+        <Stat label="Pendientes de facturar" value={pendFact} icon="📄" accent="#7c3aed"/>
+        <Stat label="Cobrados" value={totalCobr} icon="✅" accent="#16a34a" sub={totalCobr>0?fmtMoney(cobrNeto):""}/>
+        <Stat label="Total por cobrar" value={`$${(pendNeto/1000).toFixed(1)}k`} icon="💰" accent="#2563eb"/>
+      </div>
+
+      {/* Change password modal */}
+      {showPass&&(
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:20,marginBottom:20}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:10}}>🔑 Cambiar mi contraseña</div>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <input type="text" style={{...iS,maxWidth:280}} value={newPass} onChange={e=>setNewPass(e.target.value)} placeholder="Nueva contraseña" autoFocus/>
+            <Bt onClick={savePass}>Guardar</Bt>
+            <Bt v="g" onClick={()=>{setShowPass(false);setNewPass("");setPassMsg("");}}>Cancelar</Bt>
+            {passMsg&&<span style={{fontSize:12,color:"#16a34a",fontWeight:600}}>{passMsg}</span>}
+          </div>
+        </div>
+      )}
+
+      {sel&&(
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",padding:24,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+            <div>
+              <div style={{fontSize:18,fontWeight:700}}>{sel.name}</div>
+              <div style={{fontSize:14,color:"#8a857c",marginTop:3}}>Cliente: {sel.cliente}</div>
+              <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                <Bg>{TIPO_L[sel.tipo]||sel.tipo}</Bg>
+                <Bg bg="#f5f3ff" color="#7c3aed">{notarias.find(n=>n.id===sel.notariaId)?.name||"—"}</Bg>
+                {sel.pagoDate&&<Bg>Pagado a notaría: {fmt(sel.pagoDate)}</Bg>}
+              </div>
+            </div>
+            <button onClick={()=>setSelId(null)} style={{background:"#f1f0ed",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:15,color:"#8a857c",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          </div>
+
+          <div style={{padding:16,borderRadius:10,background:"#f8f7f5",marginBottom:14}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>💵 Comisión</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+              <div>
+                <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Monto bruto</div>
+                <input type="number" style={iS} value={sel.sfggMonto||""} onChange={ev=>onUpdate(sel.id,{sfggMonto:parseFloat(ev.target.value)||0})} placeholder="2000"/>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>IVA 16%</div>
+                <input style={{...iS,background:"#f1f0ed"}} value={((sel.sfggMonto||0)*0.16).toFixed(2)} readOnly/>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Monto neto</div>
+                <input style={{...iS,background:"#f1f0ed"}} value={((sel.sfggMonto||0)*1.16).toFixed(2)} readOnly/>
+              </div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Modalidad</div>
+              <select style={iS} value={sel.sfggModalidad||"factura"} onChange={ev=>onUpdate(sel.id,{sfggModalidad:ev.target.value})}>
+                <option value="factura">Factura</option>
+                <option value="efectivo">Efectivo</option>
+              </select>
+            </div>
+
+            {/* Facturación (solo si modalidad = factura) */}
+            {sel.sfggModalidad==="factura"&&(
+              <div style={{padding:12,borderRadius:8,background:sel.sfggFacturado?"#f0fdf4":"#fffbeb",border:`1px solid ${sel.sfggFacturado?"#16a34a40":"#fde68a"}`,marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:sel.sfggFacturado?6:0}}>
+                  <div style={{fontSize:12,fontWeight:700,color:sel.sfggFacturado?"#16a34a":"#92400e"}}>
+                    {sel.sfggFacturado?"✓ Facturado":"⏳ Pendiente de facturar"}
+                    {sel.sfggFacturadoAt&&<span style={{color:"#8a857c",fontWeight:500,marginLeft:6}}>— {fmt(sel.sfggFacturadoAt.split("T")[0])}</span>}
+                  </div>
+                  {!sel.sfggFacturado?
+                    <Bt onClick={()=>onUpdate(sel.id,{sfggFacturado:true,sfggFacturadoAt:new Date().toISOString()})} style={{fontSize:11,padding:"6px 12px"}}>✓ Marcar facturado</Bt>:
+                    <Bt v="w" onClick={()=>onUpdate(sel.id,{sfggFacturado:false,sfggFacturadoAt:null,sfggFacturaNum:""})} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>
+                  }
+                </div>
+                {sel.sfggFacturado&&(
+                  <div>
+                    <div style={{fontSize:11,color:"#8a857c",fontWeight:600,marginBottom:3}}>Número de factura</div>
+                    <input style={{...iS,maxWidth:240}} value={sel.sfggFacturaNum||""} onChange={ev=>onUpdate(sel.id,{sfggFacturaNum:ev.target.value})} placeholder="Ej: A-1234"/>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Cobro */}
+            <div style={{padding:12,borderRadius:8,background:sel.sfggCobrado?"#f0fdf4":"#fffbeb",border:`1px solid ${sel.sfggCobrado?"#16a34a40":"#fde68a"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div style={{fontSize:12,fontWeight:700,color:sel.sfggCobrado?"#16a34a":"#92400e"}}>
+                  {sel.sfggCobrado?(sel.sfggModalidad==="efectivo"?"✓ Cobrado en efectivo":"✓ Cobrado"):(sel.sfggModalidad==="efectivo"?"⏳ Pendiente de cobro en efectivo":"⏳ Pendiente de cobro")}
+                  {sel.sfggCobradoAt&&<span style={{color:"#8a857c",fontWeight:500,marginLeft:6}}>— {fmt(sel.sfggCobradoAt.split("T")[0])}</span>}
+                </div>
+                {!sel.sfggCobrado?
+                  <Bt onClick={()=>onUpdate(sel.id,{sfggCobrado:true,sfggCobradoAt:new Date().toISOString()})} style={{fontSize:11,padding:"6px 12px"}}>✓ Marcar cobrado</Bt>:
+                  <Bt v="w" onClick={()=>onUpdate(sel.id,{sfggCobrado:false,sfggCobradoAt:null})} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        {notarias.length>0&&(
+          <select style={{padding:"8px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"#fff",fontSize:13,fontFamily:"inherit",cursor:"pointer"}} value={filtNot} onChange={e=>setFiltNot(e.target.value)}>
+            <option value="">Todas las notarías</option>
+            {notarias.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+          </select>
+        )}
+        <select style={{padding:"8px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"#fff",fontSize:13,fontFamily:"inherit",cursor:"pointer"}} value={filt} onChange={e=>setFilt(e.target.value)}>
+          <option value="pendientes">Pendientes</option>
+          <option value="cobrados">Cobrados</option>
+          <option value="todos">Todos</option>
+        </select>
+        <span style={{fontSize:13,color:"#8a857c"}}>{filtered.length} proyecto{filtered.length!==1?"s":""}</span>
+      </div>
+
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5df",overflow:"hidden"}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 1fr 100px 100px 100px",padding:"10px 17px",borderBottom:"1px solid #e8e5df",fontSize:11,fontWeight:700,color:"#8a857c",textTransform:"uppercase",letterSpacing:"0.05em"}}>
+          <span>Proyecto / Cliente</span><span>Notaría</span><span>Monto neto</span><span>Modalidad</span><span style={{textAlign:"center"}}>Factura</span><span style={{textAlign:"center"}}>Cobro</span>
+        </div>
+        {!filtered.length&&<div style={{padding:36,textAlign:"center",color:"#8a857c",fontSize:13}}>Sin comisiones</div>}
+        {filtered.map(p=>(
+          <div key={p.id} onClick={()=>setSelId(selId===p.id?null:p.id)} style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 1fr 100px 100px 100px",padding:"12px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}>
+            <div><div style={{fontSize:14,fontWeight:600}}>{p.name}</div><div style={{fontSize:11,color:"#8a857c"}}>{p.cliente}</div></div>
+            <div style={{fontSize:12,color:"#8a857c"}}>{notarias.find(n=>n.id===p.notariaId)?.name||"—"}</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#2563eb"}}>{fmtMoney((p.sfggMonto||0)*1.16)}</div>
+            <div><Bg bg={p.sfggModalidad==="efectivo"?"#fef3c7":"#eff6ff"} color={p.sfggModalidad==="efectivo"?"#92400e":"#2563eb"}>{p.sfggModalidad==="efectivo"?"Efectivo":"Factura"}</Bg></div>
+            <div style={{textAlign:"center"}}>{p.sfggModalidad==="efectivo"?"—":p.sfggFacturado?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg="#fffbeb" color="#d97706">⏳</Bg>}</div>
+            <div style={{textAlign:"center"}}>{p.sfggCobrado?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg="#fffbeb" color="#d97706">⏳</Bg>}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{marginTop:20,textAlign:"center"}}>
+        <button onClick={()=>setShowPass(!showPass)} style={{background:"none",border:"none",color:"#8a857c",fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>🔑 Cambiar mi contraseña</button>
+      </div>
+    </div>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ADMIN VIEW (perfil administración)
@@ -1892,6 +2089,20 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("facturaLog"in upd)d.factura_log=upd.facturaLog;
     if("expediente"in upd)d.expediente=upd.expediente;
     if("csfSociedad"in upd)d.csf_sociedad=upd.csfSociedad;
+    if("sfggMonto"in upd)d.sfgg_monto=upd.sfggMonto;
+    if("sfggModalidad"in upd)d.sfgg_modalidad=upd.sfggModalidad;
+    if("sfggFacturado"in upd)d.sfgg_facturado=upd.sfggFacturado;
+    if("sfggFacturadoAt"in upd)d.sfgg_facturado_at=upd.sfggFacturadoAt;
+    if("sfggFacturaNum"in upd)d.sfgg_factura_num=upd.sfggFacturaNum;
+    if("sfggCobrado"in upd)d.sfgg_cobrado=upd.sfggCobrado;
+    if("sfggCobradoAt"in upd)d.sfgg_cobrado_at=upd.sfggCobradoAt;
+    if("sfggNotas"in upd)d.sfgg_notas=upd.sfggNotas;
+    if("registroLugar"in upd)d.registro_lugar=upd.registroLugar;
+    if("oficinaRegistral"in upd)d.oficina_registral=upd.oficinaRegistral;
+    if("entregablesDetalle"in upd)d.entregables_detalle=upd.entregablesDetalle;
+    if("entregablesListos"in upd)d.entregables_listos=upd.entregablesListos;
+    if("entregablesListosAt"in upd)d.entregables_listos_at=upd.entregablesListosAt;
+    if("entregablesComentarios"in upd)d.entregables_comentarios=upd.entregablesComentarios;
     await db.updateProject(id,d);
   };
 
@@ -2082,6 +2293,25 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     }));
   },[ps]);
 
+  // SFGG updates
+  const updateSFGG=useCallback(async(pid,upd)=>{
+    setPs(prev=>prev.map(p=>{
+      if(p.id!==pid)return p;
+      save(pid,upd);
+      return{...p,...upd};
+    }));
+  },[]);
+
+  const changeSFGGPassword=useCallback(async(newPass)=>{
+    const sfggUser=systemUsers.find(s=>s.role==="sfgg");
+    if(!sfggUser){alert("Usuario SFGG no encontrado");return;}
+    await db.updateSystemUser(sfggUser.id,{password:newPass});
+    setSystemUsers(prev=>prev.map(s=>s.id===sfggUser.id?{...s,password:newPass}:s));
+    // Update session so it doesn't get kicked out
+    const updated={...session,pass:newPass};
+    try{localStorage.setItem("cn_session",JSON.stringify(updated));}catch(e){}
+  },[systemUsers,session,setSystemUsers]);
+
   // Mark factura solicitada (when user clicks email button)
   const markFacturaSolicitada=useCallback(async(pid)=>{
     const now=new Date().toISOString();
@@ -2136,7 +2366,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     const step=isPast?2:0;
     const checklist=getChecklistTemplate(f.escenario);
     const preEtapas=mkPreEtapas();
-    const row=await db.createProject({name:f.nombre,cliente:f.cliente||"",tipo:f.tipo,escenario:f.escenario,step,created:f.fecha,fecha_acto:f.fechaActo||null,etapas,fact_sent:false,pago_marcado:false,resp_notaria:"",finished:false,notaria_id:f.notariaId,checklist,pre_etapas:preEtapas,pre_step:0,pre_done:false,pago_efectivo:false,observaciones:{},notas:[]});
+    const row=await db.createProject({name:f.nombre,cliente:f.cliente||"",tipo:f.tipo,escenario:f.escenario,step,created:f.fecha,fecha_acto:f.fechaActo||null,etapas,fact_sent:false,pago_marcado:false,resp_notaria:"",finished:false,notaria_id:f.notariaId,checklist,pre_etapas:preEtapas,pre_step:0,pre_done:false,pago_efectivo:false,observaciones:{},notas:[],registro_lugar:f.registroLugar||"local",oficina_registral:f.oficinaRegistral||"",entregables_detalle:getEntregablesTemplate(f.tipo)});
     if(row){
       const newProject=dbToApp(row[0]);
       setPs(prev=>[newProject,...prev]);
@@ -2176,7 +2406,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
 
   const filtered=useMemo(()=>{
     return baseVisiblePs.filter(p=>{
-      if(search&&!p.name.toLowerCase().includes(search.toLowerCase())&&!(p.cliente||"").toLowerCase().includes(search.toLowerCase()))return false;
+      if(search&&!p.name.toLowerCase().includes(search.toLowerCase())&&!(p.cliente||"").toLowerCase().includes(search.toLowerCase())&&!(p.numEscritura||"").toLowerCase().includes(search.toLowerCase()))return false;
       const et=getEt(p.tipo);
       if(filtro==="activos"&&p.finished)return false;
       if(filtro==="completados"&&!p.finished)return false;
@@ -2213,6 +2443,25 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
         </div>
         <div style={{padding:"22px 26px",maxWidth:1180,margin:"0 auto"}}>
           <AdminView ps={ps} onMarkPagado={markClientePagado} onAddNotaCobranza={addNotaCobranza} onSetFacturaNum={setFacturaNum} session={session}/>
+        </div>
+      </div>
+    );
+  }
+
+  // SFGG VIEW
+  if(role==="sfgg"){
+    return(
+      <div style={{fontFamily:"'Source Sans 3',sans-serif",background:"#faf9f7",minHeight:"100vh",color:"#1a1714"}}>
+        <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+        <div style={{padding:"12px 22px",borderBottom:"1px solid #e8e5df",background:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:11}}>
+            <div style={{width:36,height:36,borderRadius:9,background:"#0f766e",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:"#fff"}}>S</div>
+            <div><div style={{fontSize:14,fontWeight:700}}>{session.label}</div><div style={{fontSize:10,color:"#8a857c",letterSpacing:"0.05em",textTransform:"uppercase"}}>Comisiones</div></div>
+          </div>
+          <button onClick={onLogout} style={{padding:"7px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"transparent",color:"#8a857c",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
+        </div>
+        <div style={{padding:"22px 26px",maxWidth:1180,margin:"0 auto"}}>
+          <SFGGView ps={ps} notarias={notarias} onUpdate={updateSFGG} onChangePassword={changeSFGGPassword} session={session}/>
         </div>
       </div>
     );
@@ -2311,7 +2560,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
                     {sel.escenario&&<Bg bg="#eff6ff" color="#2563eb">{ESCENARIOS[sel.escenario]||sel.escenario}</Bg>}
                     <Bg>Creado {fmt(sel.created)}</Bg>
                     {getNotName(sel.notariaId)&&<Bg bg="#f5f3ff" color="#7c3aed">{getNotName(sel.notariaId)}</Bg>}
-                    {sel.numEscritura&&<Bg bg="#eff6ff" color="#2563eb">📜 Esc. {sel.numEscritura}</Bg>}
+                    {sel.numEscritura&&<Bg bg="#eff6ff" color="#2563eb">📜 {sel.numEscritura}</Bg>}
+                    {sel.registroLugar==="foraneo"&&<Bg bg="#fef3c7" color="#92400e">📍 Foráneo{sel.oficinaRegistral?` — ${sel.oficinaRegistral}`:""}</Bg>}
                     {sel.cliPagoTipo==="efectivo"&&<Bg bg="#fef3c7" color="#92400e">💵 Efectivo cliente</Bg>}
                     {sel.cliPagoTipo&&sel.cliPagoTipo!=="efectivo"&&(sel.clientePagado?<Bg bg="#f0fdf4" color="#16a34a">💰 Cliente pagado</Bg>:sel.facturaSolicitada?<Bg bg="#fffbeb" color="#d97706">⏳ Cliente pendiente</Bg>:null)}
                     {(()=>{const rt=calcRetrasoTotal(sel,inhFor(sel.notariaId));if(rt>0)return <Bg bg="#fef2f2" color="#dc2626">⚠ {rt} día{rt>1?"s":""} de retraso acumulado</Bg>;return null;})()}
@@ -2376,7 +2626,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
 // ═══════════════════════════════════════════════════════════════
 function NewForm({onCreate,onCancel,notarias}){
   const NOMBRES_PRESET=["Acta de Asamblea","Constitución de Sociedad","Compraventa"];
-  const[f,setF]=useState({nombrePreset:"Acta de Asamblea",nombreCustom:"",cliente:"",tipo:"sin_registro",escenario:"acta_interno",fecha:td(),fechaActo:"",notariaId:notarias[0]?.id||""});
+  const[f,setF]=useState({nombrePreset:"Acta de Asamblea",nombreCustom:"",cliente:"",tipo:"sin_registro",escenario:"acta_interno",fecha:td(),fechaActo:"",notariaId:notarias[0]?.id||"",registroLugar:"local",oficinaRegistral:""});
   const up=(k,v)=>setF(o=>({...o,[k]:v}));
   const isOtro=f.nombrePreset==="Otro";
   const nombre=isOtro?f.nombreCustom:f.nombrePreset;
@@ -2395,10 +2645,23 @@ function NewForm({onCreate,onCancel,notarias}){
         {isOtro&&<div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Especificar</div><input style={iS} value={f.nombreCustom} onChange={e=>up("nombreCustom",e.target.value)} placeholder="Nombre del proyecto"/></div>}
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Cliente</div><input style={iS} value={f.cliente} onChange={e=>up("cliente",e.target.value)} placeholder="Nombre del cliente"/></div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Tipo de registro</div><select style={iS} value={f.tipo} onChange={e=>up("tipo",e.target.value)}>{TIPOS.map(t=><option key={t} value={t}>{TIPO_L[t]}</option>)}</select></div>
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Lugar de registro</div>
+          <select style={iS} value={f.registroLugar} onChange={e=>up("registroLugar",e.target.value)}>
+            <option value="local">Local</option>
+            <option value="foraneo">Foráneo</option>
+          </select>
+        </div>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Notaría</div><select style={iS} value={f.notariaId} onChange={e=>up("notariaId",e.target.value)}>{notarias.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}{!notarias.length&&<option value="">Sin notarías registradas</option>}</select></div>
       </div>
+      {f.registroLugar==="foraneo"&&(
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Oficina registral</div>
+          <input style={iS} value={f.oficinaRegistral} onChange={e=>up("oficinaRegistral",e.target.value)} placeholder="Ej: RPPC Zapopan, RPPC Puerto Vallarta"/>
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Escenario de documentos</div><select style={iS} value={f.escenario} onChange={e=>up("escenario",e.target.value)}>{Object.entries(ESCENARIOS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
         <div><div style={{fontSize:12,fontWeight:600,color:"#8a857c",marginBottom:5}}>Fecha del acto (opcional)</div><input type="date" style={iS} value={f.fechaActo} onChange={e=>up("fechaActo",e.target.value)}/><div style={{fontSize:11,color:"#8a857c",marginTop:4}}>Fecha de la asamblea, compraventa o constitución</div></div>
