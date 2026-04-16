@@ -174,7 +174,12 @@ function fmt(d){ if(!d)return"—"; const p=d.split("-"),m=["Ene","Feb","Mar","A
 function fmtLong(d){ if(!d)return""; const p=d.split("-"),m=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]; return `${parseInt(p[2])} de ${m[parseInt(p[1])-1]} de ${p[0]}`; }
 // Normalize responsable name for filtering (trim + lowercase)
 function normResp(s){ return (s||"").trim().toLowerCase(); }
-function displayName(p){ return p.numEscritura ? `${p.numEscritura} — ${p.name}` : p.name; }
+function displayName(p){
+  let n = p.name;
+  if(p.name==="Acta de Asamblea"&&p.fechaActo) n = `Acta de Asamblea ${fmtLong(p.fechaActo)}`;
+  if(p.numEscritura) n = `${p.numEscritura} — ${n}`;
+  return n;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CHECKLIST TEMPLATES
@@ -309,9 +314,21 @@ function mkPreEtapas(){
 }
 
 function getEntregablesTemplate(tipo){
-  if(tipo==="sin_registro")return[{id:"copia_cert",label:"Copia certificada",done:false,done_at:null},{id:"testimonio",label:"Testimonio",done:false,done_at:null}];
-  if(tipo==="comercio")return[{id:"copia_cert",label:"Copia certificada",done:false,done_at:null},{id:"testimonio",label:"Testimonio",done:false,done_at:null},{id:"boleta",label:"Boleta registral",done:false,done_at:null}];
-  return[{id:"ingreso_sol",label:"Ingreso solicitud",done:false,done_at:null},{id:"comprobante",label:"Comprobante",done:false,done_at:null},{id:"copia_cert",label:"Copia certificada",done:false,done_at:null}];
+  if(tipo==="sin_registro")return[
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
+    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null}
+  ];
+  if(tipo==="comercio")return[
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
+    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null},
+    {id:"boleta",label:"Boleta registral",done:false,done_at:null,recogido:false,recogido_at:null}
+  ];
+  // propiedad y personas_juridicas
+  return[
+    {id:"ingreso_sol",label:"Ingreso solicitud",done:false,done_at:null,recogido:false,recogido_at:null},
+    {id:"copia_cert",label:"Copia certificada",done:false,done_at:null,recogido:false,recogido_at:null},
+    {id:"testimonio",label:"Testimonio",done:false,done_at:null,recogido:false,recogido_at:null}
+  ];
 }
 
 function dbToApp(r){
@@ -831,12 +848,7 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                     const venc=d.vencimiento||addBD(d.start,e.plazo,inh);
                     return <span style={{color:d?.done?"#8a857c":info.c,fontWeight:d?.done?500:700}}>Vence: {fmt(venc)}</span>;
                   })()}
-                  {/* Vencimiento ideal si difiere del real */}
-                  {!isPago&&!isFact&&e.plazo>0&&ideal&&ideal.idealVenc&&(()=>{
-                    const venc=d?.vencimiento||(d?.start?addBD(d.start,e.plazo,inh):null);
-                    if(!venc||venc===ideal.idealVenc)return null;
-                    return <span style={{color:"#8a857c",fontStyle:"italic"}}>(ideal: {fmt(ideal.idealVenc)})</span>;
-                  })()}
+                  {/* Vencimiento ideal - hidden per user request */}
                   {/* Fecha de cumplimiento */}
                   {!isPago&&d?.end&&editingDate!==e.id&&<span style={{color:"#16a34a",fontWeight:600}}>✓ Cumplida: {fmt(d.end)}</span>}
                   {/* Indicador de retraso local (responsabilidad del owner) */}
@@ -945,8 +957,10 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
                 {isFact&&!p.factSent&&envDone&&<Bt v={role==="notaria"?"n":"p"} onClick={()=>onFact(p.id)}>📄 Factura</Bt>}
                 {isFact&&p.factSent&&<Bg bg="#f0fdf4" color="#16a34a">✓ Factura {fmt(p.factDate)}</Bg>}
                 {canPago&&role==="alonso"&&<Bt v="p" onClick={()=>onPago(p.id)}>💰 Marcar pago</Bt>}
-                {isPago&&!p.factSent&&!p.pagoEfectivo&&<Bg bg="#f1f0ed" color="#8a857c">Requiere factura</Bg>}
-                {isPago&&p.factSent&&!p.pagoMarcado&&role==="notaria"&&<Bg bg="#fef2f2" color="#dc2626">⚠ Pendiente de pago — No han pagado</Bg>}
+                {isPago&&!p.pagoMarcado&&!p.pagoEfectivo&&!p.factSent&&role==="alonso"&&<Bg bg="#f1f0ed" color="#8a857c">Requiere factura</Bg>}
+                {isPago&&!p.pagoMarcado&&!p.pagoEfectivo&&!p.factSent&&role==="notaria"&&<Bg bg="#fffbeb" color="#d97706">⏳ Pendiente — Alonso no ha solicitado factura</Bg>}
+                {isPago&&!p.pagoMarcado&&p.factSent&&role==="notaria"&&<Bg bg="#fef2f2" color="#dc2626">⚠ No han pagado</Bg>}
+                {isPago&&!p.pagoMarcado&&p.pagoEfectivo&&role==="notaria"&&<Bg bg="#fef2f2" color="#dc2626">⚠ No han pagado en efectivo</Bg>}
                 {isPago&&p.pagoMarcado&&<Bg bg="#f0fdf4" color="#16a34a">✓ Pagado {fmt(p.pagoDate)}</Bg>}
                 {canAct&&!isFact&&!isPago&&<Bt v={e.owner==="notaria"?"n":"p"} onClick={()=>onDone(p.id,e.id)}>Completar ✓</Bt>}
                 {/* Allow advancing entregables when incomplete */}
@@ -978,35 +992,45 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
             {e.id==="entregables"&&(isAct||d?.done)&&(
               <div style={{marginLeft:48,marginRight:4,marginTop:6,padding:14,borderRadius:10,background:"#fff",border:"1px solid #e8e5df"}}>
                 <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>📦 Detalle de entregables</div>
-                <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:10}}>
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
                   {(p.entregablesDetalle||[]).map((ent,idx)=>(
-                    <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:8,background:ent.done?"#f0fdf4":"#f8f7f5"}}>
-                      <input type="checkbox" checked={ent.done||false} onChange={()=>{
-                        const nd=[...(p.entregablesDetalle||[])];
-                        nd[idx]={...nd[idx],done:!nd[idx].done,done_at:!nd[idx].done?new Date().toISOString():null};
-                        onUpdateEntregables(p.id,{entregablesDetalle:nd});
-                      }} style={{width:18,height:18,cursor:"pointer"}}/>
-                      <span style={{fontSize:13,fontWeight:500,textDecoration:ent.done?"line-through":"none",color:ent.done?"#16a34a":"#1a1714",flex:1}}>{ent.label}</span>
-                      {ent.done&&ent.done_at&&<span style={{fontSize:10,color:"#8a857c"}}>✓ {fmt(ent.done_at.split("T")[0])}</span>}
+                    <div key={ent.id||idx} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:8,background:ent.recogido?"#f0fdf4":ent.done?"#eff6ff":"#f8f7f5",border:`1px solid ${ent.recogido?"#16a34a30":ent.done?"#2563eb30":"transparent"}`}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13,fontWeight:600}}>{ent.label}</div>
+                        <div style={{display:"flex",gap:10,marginTop:4,fontSize:11,flexWrap:"wrap"}}>
+                          {ent.done?<span style={{color:"#2563eb",fontWeight:600}}>✓ Listo en notaría{ent.done_at?` — ${fmt(ent.done_at.split("T")[0])}`:""}</span>:<span style={{color:"#8a857c"}}>Pendiente de notaría</span>}
+                          {ent.done&&(ent.recogido?<span style={{color:"#16a34a",fontWeight:600}}>✓ Recogido{ent.recogido_at?` — ${fmt(ent.recogido_at.split("T")[0])}`:""}</span>:<span style={{color:"#d97706",fontWeight:600}}>⏳ Sin recoger por Alonso</span>)}
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:5,flexShrink:0}}>
+                        {/* Notaría marca listo */}
+                        {!ent.done&&(role==="notaria"||role==="alonso")&&(
+                          <Bt v="n" onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],done:true,done_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>✓ Listo</Bt>
+                        )}
+                        {ent.done&&!ent.recogido&&role==="alonso"&&(
+                          <Bt onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],recogido:true,recogido_at:new Date().toISOString()};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 10px"}}>📥 Recogido</Bt>
+                        )}
+                        {/* Alonso can undo any state */}
+                        {role==="alonso"&&(ent.done||ent.recogido)&&(
+                          <Bt v="w" onClick={()=>{const nd=[...(p.entregablesDetalle||[])];nd[idx]={...nd[idx],done:ent.recogido?ent.done:false,done_at:ent.recogido?ent.done_at:null,recogido:false,recogido_at:null};onUpdateEntregables(p.id,{entregablesDetalle:nd});}} style={{fontSize:10,padding:"5px 8px"}}>↩</Bt>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
-                {/* Listos para recoger */}
-                <div style={{padding:12,borderRadius:8,background:p.entregablesListos?"#f0fdf4":"#fffbeb",border:`1px solid ${p.entregablesListos?"#16a34a":"#fde68a"}40`,marginBottom:10}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700,color:p.entregablesListos?"#16a34a":"#92400e"}}>
-                        {p.entregablesListos?"📦 Entregables listos para recoger en notaría":"📦 Pendiente — no están listos para recoger"}
+                {/* Listos para recoger - resumen */}
+                {(()=>{
+                  const allDone=(p.entregablesDetalle||[]).every(e=>e.done);
+                  const allRecogido=(p.entregablesDetalle||[]).every(e=>e.recogido);
+                  const someDone=(p.entregablesDetalle||[]).some(e=>e.done);
+                  return(
+                    <div style={{padding:10,borderRadius:8,background:allRecogido?"#f0fdf4":allDone?"#eff6ff":"#f8f7f5",border:`1px solid ${allRecogido?"#16a34a30":allDone?"#2563eb30":"#e8e5df"}`,marginBottom:10}}>
+                      <div style={{fontSize:12,fontWeight:700,color:allRecogido?"#16a34a":allDone?"#2563eb":"#8a857c"}}>
+                        {allRecogido?"✓ Todos los entregables recogidos":allDone?"📦 Todos listos en notaría — pendiente recoger":someDone?"📦 Algunos entregables listos":"⏳ Pendiente de entregables"}
                       </div>
-                      {p.entregablesListos&&p.entregablesListosAt&&<div style={{fontSize:11,color:"#8a857c",marginTop:2}}>Marcado el {fmt(p.entregablesListosAt.split("T")[0])}</div>}
                     </div>
-                    {(role==="notaria"||role==="alonso")&&(
-                      !p.entregablesListos?
-                        <Bt onClick={()=>onUpdateEntregables(p.id,{entregablesListos:true,entregablesListosAt:new Date().toISOString()})} style={{fontSize:11,padding:"6px 12px"}}>📦 Marcar listos para recoger</Bt>:
-                        (role==="alonso"?<Bt v="w" onClick={()=>onUpdateEntregables(p.id,{entregablesListos:false,entregablesListosAt:null})} style={{fontSize:11,padding:"6px 12px"}}>↩ Deshacer</Bt>:null)
-                    )}
-                  </div>
-                </div>
+                  );
+                })()}
                 {/* Comentarios de entregables */}
                 {(()=>{
                   const comms=p.entregablesComentarios||[];
