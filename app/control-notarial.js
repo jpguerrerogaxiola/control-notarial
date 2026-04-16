@@ -991,9 +991,9 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 
             {/* Entregables desglosados inside entregables step */}
             {e.id==="entregables"&&(isAct||d?.done)&&(()=>{
-              // Auto-generate entregables if empty (for projects created before v4)
+              // Auto-generate entregables if empty or missing estricto field (for projects created before v4.4)
               let det=p.entregablesDetalle||[];
-              if(!det.length){det=getEntregablesTemplate(p.tipo);onUpdateEntregables(p.id,{entregablesDetalle:det});}
+              if(!det.length||(det.length>0&&det[0].estricto===undefined)){det=getEntregablesTemplate(p.tipo);onUpdateEntregables(p.id,{entregablesDetalle:det});}
               const allDone=det.length>0&&det.every(x=>x.done);
               const allRecogido=det.length>0&&det.every(x=>x.recogido);
               const someDone=det.some(x=>x.done);
