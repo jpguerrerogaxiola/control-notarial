@@ -2258,10 +2258,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const inhFor=useCallback((notariaId)=>inh.filter(d=>!d.nid||d.nid===notariaId),[inh]);
 
   useEffect(()=>{(async()=>{setLoading(true);const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);setPs((projects||[]).map(dbToApp));setInh([...LFT.map(d=>({...d,id:null,nid:null})),...(dias||[]).map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);setLoading(false);})();},[]);
-  useEffect(()=>{const iv=setInterval(async()=>{
-    // Skip polling if a save happened in the last 5 seconds to avoid overwriting optimistic updates
-    if(Date.now()-lastSaveRef.current<5000)return;
-    const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);if(projects)setPs(projects.map(dbToApp));if(dias)setInh([...LFT.map(d=>({...d,id:null,nid:null})),...dias.map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);},30000);return()=>clearInterval(iv);},[]);
+  // No automatic polling - data refreshes only on page load and after each save
+  // This prevents race conditions where polling overwrites optimistic local state
 
   const alerts=useMemo(()=>buildAlerts(ps,inh,inhFor),[ps,inh,inhFor]);
 
@@ -2308,7 +2306,15 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     if("entregablesListosAt"in upd)d.entregables_listos_at=upd.entregablesListosAt;
     if("entregablesComentarios"in upd)d.entregables_comentarios=upd.entregablesComentarios;
     if("modificaciones"in upd)d.modificaciones=upd.modificaciones;
-    await db.updateProject(id,d);
+    const res = await db.updateProject(id,d);
+    // After successful save, refresh this specific project from DB to ensure consistency
+    if(res){
+      const fresh = await sb("projects","GET",null,`?id=eq.${id}`);
+      if(fresh&&fresh[0]){
+        const freshP = dbToApp(fresh[0]);
+        setPs(prev=>prev.map(p=>p.id===id?freshP:p));
+      }
+    }
   };
 
   // Pre-pipeline advance
