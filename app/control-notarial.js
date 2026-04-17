@@ -999,22 +999,10 @@ function Pipe({p,inh,role,onDone,onUndo,onFact,onPago,onEditDate,onSetObs,onClea
 
             {/* Entregables desglosados inside entregables step */}
             {e.id==="entregables"&&(isAct||d?.done)&&(()=>{
-              // Auto-generate entregables if empty. If items exist but missing estricto field,
-              // merge the new template fields into existing items preserving their done/recogido state
+              // Use entregables from project data. If empty, generate template on the fly for display only.
+              // The actual DB migration happens in the initial data load, not here.
               let det=p.entregablesDetalle||[];
-              if(!det.length){
-                det=getEntregablesTemplate(p.tipo);
-                onUpdateEntregables(p.id,{entregablesDetalle:det});
-              } else if(det.length>0&&det[0].estricto===undefined){
-                // Merge: get template, apply existing done/recogido states by matching id
-                const tmpl=getEntregablesTemplate(p.tipo);
-                det=tmpl.map(t=>{
-                  const existing=det.find(x=>x.id===t.id);
-                  if(existing)return{...t,done:existing.done||false,done_at:existing.done_at||null,recogido:existing.recogido||false,recogido_at:existing.recogido_at||null};
-                  return t;
-                });
-                onUpdateEntregables(p.id,{entregablesDetalle:det});
-              }
+              if(!det.length) det=getEntregablesTemplate(p.tipo);
               const allDone=det.length>0&&det.every(x=>x.done);
               const allRecogido=det.length>0&&det.every(x=>x.recogido);
               const someDone=det.some(x=>x.done);
@@ -2270,11 +2258,17 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const inhFor=useCallback((notariaId)=>inh.filter(d=>!d.nid||d.nid===notariaId),[inh]);
 
   useEffect(()=>{(async()=>{setLoading(true);const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);setPs((projects||[]).map(dbToApp));setInh([...LFT.map(d=>({...d,id:null,nid:null})),...(dias||[]).map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);setLoading(false);})();},[]);
-  useEffect(()=>{const iv=setInterval(async()=>{const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);if(projects)setPs(projects.map(dbToApp));if(dias)setInh([...LFT.map(d=>({...d,id:null,nid:null})),...dias.map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);},30000);return()=>clearInterval(iv);},[]);
+  useEffect(()=>{const iv=setInterval(async()=>{
+    // Skip polling if a save happened in the last 5 seconds to avoid overwriting optimistic updates
+    if(Date.now()-lastSaveRef.current<5000)return;
+    const[projects,dias]=await Promise.all([db.getProjects(),db.getDias()]);if(projects)setPs(projects.map(dbToApp));if(dias)setInh([...LFT.map(d=>({...d,id:null,nid:null})),...dias.map(d=>({fecha:d.fecha,motivo:d.motivo,id:d.id,nid:d.notaria_id}))]);},30000);return()=>clearInterval(iv);},[]);
 
   const alerts=useMemo(()=>buildAlerts(ps,inh,inhFor),[ps,inh,inhFor]);
 
+  const lastSaveRef=useRef(0);
+
   const save=async(id,upd)=>{
+    lastSaveRef.current=Date.now();
     const d={};
     if("step"in upd)d.step=upd.step;if("etapas"in upd)d.etapas=upd.etapas;if("finished"in upd)d.finished=upd.finished;
     if("finDate"in upd)d.fin_date=upd.finDate;if("factSent"in upd)d.fact_sent=upd.factSent;if("factDate"in upd)d.fact_date=upd.factDate;
