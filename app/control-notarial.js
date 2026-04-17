@@ -2359,7 +2359,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
       if(nx<et.length&&et[nx].id==="pago"&&p.pagoMarcado){ne.pago={...ne.pago,done:true,start:p.pagoDate,end:p.pagoDate};nx++;}
       if(nx<et.length)ne[et[nx].id]={...ne[et[nx].id],start:h};
       const r={...p,etapas:ne,step:nx};
-      save(pid,r);return r;
+      save(pid,{etapas:ne,step:nx});return r;
     }
     ne[eid]={...ne[eid],done:true,end:h};
     let nx=p.step+1;
@@ -2370,7 +2370,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     const fin=nx>=et.length;
     const r={...p,etapas:ne,step:nx,finished:fin,finDate:fin?h:null};
     if(fin)setShowConfetti(true);
-    save(pid,r);return r;
+    save(pid,{etapas:ne,step:nx,finished:fin,finDate:fin?h:null});return r;
   }));},[]);
 
   // Undo any step
@@ -2389,8 +2389,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     save(pid,{etapas:ne,step:idx,finished:false,finDate:null});return r;
   }));},[]);
 
-  const markFact=useCallback(async(pid)=>{const h=td();setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const r={...p,factSent:true,factDate:h};save(pid,r);return r;}));},[]);
-  const markPago=useCallback(async(pid)=>{const h=td();setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const r={...p,pagoMarcado:true,pagoDate:h};save(pid,r);return r;}));},[]);
+  const markFact=useCallback(async(pid)=>{const h=td();setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const r={...p,factSent:true,factDate:h};save(pid,{factSent:true,factDate:h});return r;}));},[]);
+  const markPago=useCallback(async(pid)=>{const h=td();setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;const r={...p,pagoMarcado:true,pagoDate:h};save(pid,{pagoMarcado:true,pagoDate:h});return r;}));},[]);
   const setRN=useCallback(async(pid,v)=>{setPs(prev=>prev.map(p=>{if(p.id!==pid)return p;save(pid,{respNotaria:v});return{...p,respNotaria:v};}));},[]);
 
   const editDate=useCallback(async(pid,eid,newDate)=>{
