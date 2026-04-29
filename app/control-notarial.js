@@ -180,6 +180,22 @@ function displayName(p){
   if(p.numEscritura) n = `${p.numEscritura} — ${n}`;
   return n;
 }
+// Check if notaría has completed their part (all strict entregables done, or project finished, or no entregables step yet)
+function notariaDone(p){
+  if(p.finished)return true;
+  if(!p.preDone)return false;
+  const det=p.entregablesDetalle||[];
+  if(!det.length)return false;
+  const strict=det.filter(x=>x.estricto!==false);
+  if(!strict.length)return false;
+  return strict.every(x=>x.done);
+}
+// For role-based "is this project finished?"
+function isFinishedForRole(p,role){
+  if(p.finished)return true;
+  if(role==="notaria")return notariaDone(p);
+  return false;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CHECKLIST TEMPLATES
@@ -2604,7 +2620,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
   const updateSystemUser=useCallback(async(id,f)=>{await db.updateSystemUser(id,f);setSystemUsers(prev=>prev.map(s=>s.id===id?{...s,...f}:s));},[setSystemUsers]);
 
   const isMyTurn=(p)=>{
-    if(p.archivado)return false;
+    if(isFinishedForRole(p,role))return false;
     if(role==="alonso"&&!p.preDone)return true; // pre-stages always alonso
     if(!p.preDone)return false;
     const et=getEt(p.tipo);if(p.finished||p.step>=et.length)return false;
@@ -2627,20 +2643,21 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
     return baseVisiblePs.filter(p=>{
       if(search&&!p.name.toLowerCase().includes(search.toLowerCase())&&!(p.cliente||"").toLowerCase().includes(search.toLowerCase())&&!(p.numEscritura||"").toLowerCase().includes(search.toLowerCase()))return false;
       const et=getEt(p.tipo);
-      if(filtro==="activos"&&p.finished)return false;
-      if(filtro==="completados"&&!p.finished)return false;
+      const fin=isFinishedForRole(p,role);
+      if(filtro==="activos"&&fin)return false;
+      if(filtro==="completados"&&!fin)return false;
       if(filtro==="mi_turno")return isMyTurn(p);
-      if(filtro==="vencidos"){if(p.finished||!p.preDone||p.step>=et.length)return false;return getSt(p,p.step,inhFor(p.notariaId)).s==="over";}
+      if(filtro==="vencidos"){if(fin||!p.preDone||p.step>=et.length)return false;return getSt(p,p.step,inhFor(p.notariaId)).s==="over";}
       return true;
     });
   },[baseVisiblePs,filtro,role,inh,search,inhFor]);
 
   const visiblePs=baseVisiblePs;
   const sel=ps.find(p=>p.id===selId);
-  const act=visiblePs.filter(p=>!p.finished).length;
+  const act=visiblePs.filter(p=>!isFinishedForRole(p,role)).length;
   const mt=visiblePs.filter(p=>isMyTurn(p)).length;
-  const ov=visiblePs.filter(p=>{if(!p.preDone)return false;const et=getEt(p.tipo);return!p.finished&&p.step<et.length&&getSt(p,p.step,inhFor(p.notariaId)).s==="over";}).length;
-  const comp=visiblePs.filter(p=>p.finished).length;
+  const ov=visiblePs.filter(p=>{const fin=isFinishedForRole(p,role);if(!p.preDone||fin)return false;const et=getEt(p.tipo);return p.step<et.length&&getSt(p,p.step,inhFor(p.notariaId)).s==="over";}).length;
+  const comp=visiblePs.filter(p=>isFinishedForRole(p,role)).length;
   const tab=(v,l)=><button key={v} onClick={()=>setVista(v)} style={{padding:"7px 14px",borderRadius:8,border:"none",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:vista===v?"#2563eb":"transparent",color:vista===v?"#fff":"#8a857c"}}>{l}</button>;
   const fS={padding:"8px 13px",borderRadius:8,border:"1px solid #e8e5df",background:"#fff",color:"#1a1714",fontSize:13,outline:"none",cursor:"pointer",fontFamily:"inherit"};
 
@@ -2876,7 +2893,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               const et=isPre?null:getEt(p.tipo);
               const e=isPre?PRE_ETAPAS[p.preStep]:(p.step<et.length?et[p.step]:null);
               const info=isPre?{c:"#7c3aed",l:"Previo"}:(e?getSt(p,p.step,inhFor(p.notariaId)):{c:"#16a34a",l:"✓"});
-              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}>{displayName(p)}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!p.finished?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{p.finished?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
+              const fin=isFinishedForRole(p,role);
+              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}>{displayName(p)}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{fin?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!fin?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{fin?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
             })}
           </div>
         </>}
