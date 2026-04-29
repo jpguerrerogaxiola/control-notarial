@@ -180,9 +180,8 @@ function displayName(p){
   if(p.numEscritura) n = `${p.numEscritura} — ${n}`;
   return n;
 }
-// Check if notaría has completed their part (all strict entregables done, or project finished, or no entregables step yet)
-function notariaDone(p){
-  if(p.finished)return true;
+// Check if notaría has completed their strict obligations
+function notariaStrictDone(p){
   if(!p.preDone)return false;
   const det=p.entregablesDetalle||[];
   if(!det.length)return false;
@@ -190,11 +189,36 @@ function notariaDone(p){
   if(!strict.length)return false;
   return strict.every(x=>x.done);
 }
+// Check if ALL entregables (including estimados) are done
+function notariaAllDone(p){
+  if(!p.preDone)return false;
+  const det=p.entregablesDetalle||[];
+  if(!det.length)return false;
+  return det.every(x=>x.done);
+}
+// Has pending estimado items (testimonio/boleta)?
+function hasPendingEstimados(p){
+  const det=p.entregablesDetalle||[];
+  const estimados=det.filter(x=>x.estricto===false);
+  return estimados.length>0&&!estimados.every(x=>x.done);
+}
 // For role-based "is this project finished?"
 function isFinishedForRole(p,role){
   if(p.finished)return true;
-  if(role==="notaria")return notariaDone(p);
+  if(role==="notaria"){
+    // If strict are done AND all estimados are done (or there are none) → completed
+    if(notariaStrictDone(p)&&!hasPendingEstimados(p))return true;
+    // If strict are done but estimados pending → NOT completed (intermediate state)
+    return false;
+  }
   return false;
+}
+// For notaría display status
+function getNotariaStatus(p){
+  if(p.finished)return{label:"✓ Completado",color:"#16a34a",bg:"#f0fdf4"};
+  if(notariaStrictDone(p)&&hasPendingEstimados(p))return{label:"⏳ Pendiente testimonio/boleta",color:"#7c3aed",bg:"#f5f3ff"};
+  if(notariaStrictDone(p))return{label:"✓ Completado",color:"#16a34a",bg:"#f0fdf4"};
+  return null; // not done yet, use normal status
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2621,7 +2645,9 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
 
   const isMyTurn=(p)=>{
     if(isFinishedForRole(p,role))return false;
-    if(role==="alonso"&&!p.preDone)return true; // pre-stages always alonso
+    // For notaría: if strict entregables done, it's not their turn anymore even if estimados pending
+    if(role==="notaria"&&notariaStrictDone(p))return false;
+    if(role==="alonso"&&!p.preDone)return true;
     if(!p.preDone)return false;
     const et=getEt(p.tipo);if(p.finished||p.step>=et.length)return false;
     return role==="alonso"||et[p.step].owner==="notaria";
@@ -2647,7 +2673,7 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
       if(filtro==="activos"&&fin)return false;
       if(filtro==="completados"&&!fin)return false;
       if(filtro==="mi_turno")return isMyTurn(p);
-      if(filtro==="vencidos"){if(fin||!p.preDone||p.step>=et.length)return false;return getSt(p,p.step,inhFor(p.notariaId)).s==="over";}
+      if(filtro==="vencidos"){if(fin||!p.preDone||p.step>=et.length)return false;if(role==="notaria"&&notariaStrictDone(p))return false;return getSt(p,p.step,inhFor(p.notariaId)).s==="over";}
       return true;
     });
   },[baseVisiblePs,filtro,role,inh,search,inhFor]);
@@ -2894,7 +2920,8 @@ function Dash({session,notarias,setNotarias,systemUsers,setSystemUsers,onLogout}
               const e=isPre?PRE_ETAPAS[p.preStep]:(p.step<et.length?et[p.step]:null);
               const info=isPre?{c:"#7c3aed",l:"Previo"}:(e?getSt(p,p.step,inhFor(p.notariaId)):{c:"#16a34a",l:"✓"});
               const fin=isFinishedForRole(p,role);
-              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}>{displayName(p)}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{fin?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!fin?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{fin?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
+              const notSt=role==="notaria"?getNotariaStatus(p):null;
+              return <div key={p.id} style={{display:"grid",gridTemplateColumns:role==="alonso"?"2fr 1fr 1.2fr 1fr 70px":"2.5fr 1.2fr 1fr 70px",padding:"11px 17px",borderBottom:"1px solid #e8e5df",cursor:"pointer",alignItems:"center",background:selId===p.id?"#dbeafe":"transparent"}} onClick={()=>setSelId(selId===p.id?null:p.id)} onMouseEnter={ev=>{if(selId!==p.id)ev.currentTarget.style.background="#f8f7f5";}} onMouseLeave={ev=>{if(selId!==p.id)ev.currentTarget.style.background="transparent";}}><div><div style={{fontSize:14,fontWeight:600}}>{displayName(p)}</div><div style={{fontSize:12,color:"#8a857c"}}>{p.cliente?`${p.cliente} — `:""}{TIPO_L[p.tipo]}</div></div>{role==="alonso"&&<div style={{fontSize:12,color:"#8a857c"}}>{getNotName(p.notariaId)}</div>}<div>{notSt?<Bg bg={notSt.bg} color={notSt.color}>{notSt.label}</Bg>:fin?<Bg bg="#f0fdf4" color="#16a34a">✓ Completado</Bg>:<Bg bg={info.c+"15"} color={info.c}>{e?.label}</Bg>}</div><div>{e&&!fin&&!notSt?(isPre?<Bg bg="#eff6ff" color="#2563eb">Alonso</Bg>:<OBg o={e.owner}/>):"—"}</div><div style={{textAlign:"center"}}>{notSt?<Bg bg={notSt.bg} color={notSt.color}>{notSt.label.includes("Pendiente")?"⏳":"✓"}</Bg>:fin?<Bg bg="#f0fdf4" color="#16a34a">✓</Bg>:<Bg bg={info.c+"15"} color={info.c} style={{fontSize:10}}>{info.l}</Bg>}</div></div>;
             })}
           </div>
         </>}
